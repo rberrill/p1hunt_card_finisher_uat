@@ -1,0 +1,431 @@
+/* =====================================================================
+   js/app/corner-shots.js: Corner shots, close-ups of the card's four corners as one 2×2 sheet
+   or four photos, in their own sheet, opened by the Corner shots button on Export (a wide
+   screen lists it in the panel). They render like the main export, from the full-resolution
+   photo, without the overlay; the geometry is CardEngine.cornerShots. The sheet / photos
+   choice is a remembered preference, not edit state.
+   Shell modules share one namespace, CF (created in core.js). Names from core are
+   destructured below; anything from another module is called as CF.name.
+   tests/selftest.js checks these boundaries.
+   ===================================================================== */
+(function (CF) {
+  'use strict';
+  const {
+    byId, makeEl, elements, clone, makeCanvas, context2d, app, geometryConfig, toast,
+  } = CF;
+
+  // The two outputs: one 2×2 image, or four files.
+  const OUTPUTS = ['sheet', 'photos'];
+  // Some browsers drop a download started in the same moment as another, so the four photos
+  // start this far apart.
+  const DOWNLOAD_GAP_MS = 250;
+  // The gap left above Corner shots when its button scrolls the panel to it, so its heading
+  // doesn't sit flush against the panel's edge.
+  const CORNER_SCROLL_MARGIN_PX = 8;
+  // The thumbnails, left to right (the sheet's reading order: tl tr over bl br), with what a
+  // screen reader calls each.
+  const THUMBNAILS = [
+    { corner: 'tl', label: 'Top-left corner' },
+    { corner: 'tr', label: 'Top-right corner' },
+    { corner: 'bl', label: 'Bottom-left corner' },
+    { corner: 'br', label: 'Bottom-right corner' },
+  ];
+  // The output control's two choices, as they read on screen.
+  const OUTPUT_OPTIONS = [
+    { value: 'photos', label: '4 photos' },
+    { value: 'sheet', label: '1 sheet' },
+  ];
+  const CORNER_HINT = 'Close-ups of the card’s four corners, at the photo’s own resolution, '
+    + 'with this photo’s levels and no overlay.';
+
+  /* ---------- the output choice (a preference) ---------- */
+
+  // The remembered output. localStorage is untrusted, so anything but a known output falls
+  // back to CONFIG's, and a bad CONFIG value to the sheet.
+  function storedOutput() {
+    const stored = CF.Prefs.load().cornerShots;
+    if (OUTPUTS.includes(stored)) return stored;
+    return OUTPUTS.includes(CONFIG.cornerShots.output) ? CONFIG.cornerShots.output : 'sheet';
+  }
+
+  // Picks the sheet or the photos. Files waiting for "Share now" were the other output, so
+  // they're dropped.
+  function setOutput(output) {
+    if (!OUTPUTS.includes(output)) return;
+    app.cornerShotsOutput = output;
+    app.pendingCorners = null;
+    CF.Prefs.save();
+    syncCornerShots();
+  }
+
+  // The corner shots of the current edits (CardEngine.cornerShots), or { ok: false }.
+  function currentShots() {
+    if (!app.geometry || !app.geometry.ok) return { ok: false };
+    return CardEngine.cornerShots(app.geometry, CONFIG.cornerShots);
+  }
+
+  /* ---------- rendering and encoding ---------- */
+
+  // Renders shot i of `shots` → a Promise of its canvas, at the photo's resolution or, when
+  // shots.isUpscaled, at the asked size and then sharpened (CF.sharpenUpscaled). onProgress
+  // gets the fraction done over all four shots.
+  async function renderShot(state, shots, i, onProgress) {
+    const count = shots.shots.length;
+    const shotProgress = fraction => onProgress((i + fraction) / count);
+    const sizePx = shots.sizePx;
+    const outputToSource = shots.shots[i].outputToSource;
+    const canvas = await CF.renderWarped(state, outputToSource, sizePx, sizePx, shotProgress);
+    if (!shots.isUpscaled) return canvas;
+    const whole = { x: 0, y: 0, width: sizePx, height: sizePx };
+    await CF.sharpenUpscaled(canvas, whole, sizePx / shots.realPx);
+    return canvas;
+  }
+
+  // The four photos, rendered and encoded one at a time (phone memory) → Files named
+  // <photo>-corner-tl, -tr, -br, -bl.
+  async function encodePhotos(state, shots, type, onProgress) {
+    const files = [];
+    for (let i = 0; i < shots.shots.length; i++) {
+      const canvas = await renderShot(state, shots, i, onProgress);
+      files.push(await CF.encodeCanvas(canvas, state, type));
+    }
+    const extension = CF.extensionFor(files[0]);
+    const baseName = CF.exportBaseName(state);
+    return files.map((blob, i) => {
+      const name = `${baseName}-corner-${shots.shots[i].label}.${extension}`;
+      return new File([blob], name, { type: blob.type });
+    });
+  }
+
+  // The sheet → one File named <photo>-corners: the four shots in a 2×2 grid (tl tr over
+  // bl br), the gutter between them in the export fill, each shot freed once it's drawn. An
+  // upscaled sheet is exactly the target size.
+  async function encodeSheet(state, shots, type, onProgress) {
+    const sheetPx = shots.isUpscaled ? CONFIG.cornerShots.upscaleTargetPx : 0;
+    const layout = CardEngine.cornerSheetLayout(shots.sizePx, CONFIG.cornerShots, sheetPx);
+    const sheet = makeCanvas(layout.width, layout.height);
+    const ctx = context2d(sheet);
+    if (state.export.fill !== 'transparent') {
+      ctx.fillStyle = state.export.fill;
+      ctx.fillRect(0, 0, layout.width, layout.height);
+    }
+    for (let i = 0; i < shots.shots.length; i++) {
+      const label = shots.shots[i].label;
+      const tile = layout.tiles.find(candidate => candidate.label === label);
+      const canvas = await renderShot(state, shots, i, onProgress);
+      ctx.drawImage(canvas, tile.x, tile.y);
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+    const blob = await CF.encodeCanvas(sheet, state, type);
+    const extension = CF.extensionFor(blob);
+    const name = `${CF.exportBaseName(state)}-corners.${extension}`;
+    return [new File([blob], name, { type: blob.type })];
+  }
+
+  /* ---------- saving ---------- */
+
+  // The side of the file the current output saves (the sheet, or each photo) for tiles of
+  // sizePx.
+  function filePx(sizePx) {
+    if (app.cornerShotsOutput === 'photos') return sizePx;
+    return CardEngine.cornerSheetLayout(sizePx, CONFIG.cornerShots).width;
+  }
+
+  // The tile side that makes the file exactly CONFIG.cornerShots.upscaleTargetPx.
+  function upscaledTilePx() {
+    const targetPx = CONFIG.cornerShots.upscaleTargetPx;
+    if (app.cornerShotsOutput === 'photos') return targetPx;
+    return CardEngine.cornerSheetTilePx(targetPx, CONFIG.cornerShots);
+  }
+
+  // Saves the corner shots of the current edits. kind: 'download' or 'share'. When the file
+  // (the sheet, or each photo) would be under CONFIG.cornerShots.upscaleTargetPx at the
+  // photo's resolution, the upscale question (CF.askUpscale) comes first; Yes or No then
+  // saves, Cancel doesn't. Never marks the edits as exported: only the main
+  // export shows Next card.
+  function saveCornerShots(kind) {
+    if (!app.img || app.exporting || app.isSwitching) return;
+    const shots = currentShots();
+    if (!shots.ok) {
+      toast(shots.reason, 'error', 5000);
+      return;
+    }
+    const targetPx = CONFIG.cornerShots.upscaleTargetPx;
+    const realFilePx = filePx(shots.sizePx);
+    if (!(targetPx > 0) || realFilePx >= targetPx) {
+      renderAndSave(kind, false);
+      return;
+    }
+    const what = app.cornerShotsOutput === 'photos' ? 'Each corner is' : 'The sheet is';
+    const text = `${what} ${realFilePx} px at the photo’s resolution.`;
+    CF.askUpscale(targetPx, text, isUpscaled => renderAndSave(kind, isUpscaled));
+  }
+
+  // Renders and saves the corner shots. isUpscaled: render every tile at the size that makes
+  // the file CONFIG.cornerShots.upscaleTargetPx, bicubic whatever the export's interpolation,
+  // and sharpen it (renderShot).
+  async function renderAndSave(kind, isUpscaled) {
+    const state = clone(app.state);
+    const geometry = CardEngine.computeGeometry(state, geometryConfig());
+    const tilePx = isUpscaled ? upscaledTilePx() : 0;
+    const shots = CardEngine.cornerShots(geometry, CONFIG.cornerShots, tilePx);
+    if (!shots.ok) {
+      toast(shots.reason, 'error', 5000);
+      return;
+    }
+    shots.isUpscaled = isUpscaled;
+    if (isUpscaled) state.export.interp = 'bicubic';
+    const type = CF.MIME_TYPES[state.export.format];
+    const encode = app.cornerShotsOutput === 'photos' ? encodePhotos : encodeSheet;
+    const startTime = performance.now();
+    try {
+      // The line runs on this sheet's top edge, also where a wide screen lists it inline.
+      const files = await CF.runWithProgress(
+        onProgress => encode(state, shots, type, onProgress),
+        byId('cornerShotsSheet'),
+      );
+      await deliverCornerShots(kind, files, startTime, shots, type);
+    } catch (error) {
+      console.error(error);
+      toast('Corner shots failed: ' + error.message, 'error', 6000);
+    }
+  }
+
+  // Delivers finished corner files by Download or Share, with a toast saying how it went and,
+  // after an upscale, at what size. type: the requested MIME type (CF.toastSaved's note).
+  async function deliverCornerShots(kind, files, startTime, shots, type) {
+    const seconds = ((performance.now() - startTime) / 1000).toFixed(1);
+    const what = files.length === 1 ? 'the corner sheet' : `${files.length} corner shots`;
+    const size = shots.isUpscaled ? ` at ${CONFIG.cornerShots.upscaleTargetPx} px` : '';
+    const done = `Saved ${what}${size} in ${seconds} s.`;
+    if (kind === 'download') {
+      // Saved first, since a download can leave the page on iPhone.
+      CF.Session.flush();
+      for (let i = 0; i < files.length; i++) {
+        if (i) await new Promise(resolve => setTimeout(resolve, DOWNLOAD_GAP_MS));
+        CF.Exporter.download(files[i], files[i].name);
+      }
+      CF.toastSaved(done, files, type, 'saved');
+      return;
+    }
+    const outcome = await shareCornerShots(files);
+    CF.toastSaved(done, files, type, outcome);
+  }
+
+  // Shares the corner files in one share sheet. On 'pending' (a slow render) the sheet's
+  // Share button becomes "Share now"; any edit cancels it. Returns CF.shareFiles' outcome.
+  async function shareCornerShots(files) {
+    // A tap on Share now: the toast that said to tap it has done its job.
+    if (app.pendingCorners) CF.hideToast();
+    const outcome = await CF.shareFiles(files, !app.pendingCorners);
+    if (outcome === 'pending') app.pendingCorners = files;
+    else if (outcome !== 'cancelled') app.pendingCorners = null;
+    syncCornerShots();
+    return outcome;
+  }
+
+  /* ---------- the sheet: thumbnails, output, readout, save row ---------- */
+
+  // The readout: what will be saved and how big, at the photo's real resolution; or, for a
+  // card too small to give corner shots, that it is (frame CS6).
+  function readout(shots, state) {
+    const isPhotos = app.cornerShotsOutput === 'photos';
+    if (!shots.ok) return [`${isPhotos ? '4 photos' : 'Sheet'} · the card is too small`];
+    const format = state.export.format.toUpperCase();
+    const sizePx = shots.sizePx;
+    if (isPhotos) {
+      return ['4 photos · ', makeEl('b', null, `${sizePx} × ${sizePx}`), ` px · ${format}`];
+    }
+    const layout = CardEngine.cornerSheetLayout(sizePx, CONFIG.cornerShots);
+    const sheetSize = makeEl('b', null, `${layout.width} × ${layout.height}`);
+    return ['Sheet ', sheetSize, ` px · ${sizePx} px corners · ${format}`];
+  }
+
+  // Syncs the sheet to the edits and the output choice. Called from CF.syncReadouts. Both save
+  // buttons are off while the corners are invalid or anything is being saved (frame CS4);
+  // "Share now" stays on, since its files are already rendered. For a card that is too small
+  // they stay on, and a tap says why nothing is saved (frame CS6).
+  function syncCornerShots() {
+    const state = app.state;
+    if (!state) return;
+    const shots = currentShots();
+    const isSaving = !!app.exporting || !!app.isSwitching;
+    const isTooSmall = !shots.ok && !!shots.reason;
+    const canSave = shots.ok || isTooSmall;
+    CF.updateSegmented(byId('cornerOutput'), app.cornerShotsOutput);
+    byId('cornerReadout').replaceChildren(...(canSave ? readout(shots, state) : []));
+    CF.updateActionButton(byId('btnCornerShare'), {
+      label: app.pendingCorners ? 'Share now' : 'Share corners',
+      isDisabled: !canSave || (isSaving && !app.pendingCorners),
+    });
+    CF.updateActionButton(byId('btnCornerDownload'), { isDisabled: !canSave || isSaving });
+    requestThumbs();
+  }
+
+  // True while the thumbnails can be seen: on Export with the Corner shots sheet open (a wide
+  // screen lists it in the panel, always open).
+  function areThumbsShown() {
+    return app.tab === 'export' && CF.isSheetOpen(byId('cornerShotsSheet'));
+  }
+
+  let isThumbsQueued = false;
+  // Redraws the thumbnails on the next frame, at most once a frame, and only while they show.
+  function requestThumbs() {
+    if (isThumbsQueued || !areThumbsShown()) return;
+    isThumbsQueued = true;
+    requestAnimationFrame(() => {
+      isThumbsQueued = false;
+      drawThumbs();
+    });
+  }
+
+  // Draws each shot from the warped preview copy with the applied levels, as the photo is drawn
+  // on screen (view.js drawResult): thumbnail px ← rotated px ← perspective px ← preview px.
+  // They show framing, not sharpness.
+  function drawThumbs() {
+    const shots = currentShots();
+    const preview = shots.ok ? CF.ensurePerspectivePreview() : null;
+    const exportFill = app.state.export.fill;
+    const fill = exportFill === 'transparent' ? CONFIG.theme.stage : exportFill;
+    const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+    document.querySelectorAll('canvas[data-corner]').forEach(canvas => {
+      const size = Math.round(canvas.getBoundingClientRect().width * pixelRatio);
+      if (!size) return;
+      if (canvas.width !== size) {
+        canvas.width = size;
+        canvas.height = size;
+      }
+      const ctx = context2d(canvas);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = fill;
+      ctx.fillRect(0, 0, size, size);
+      if (!preview) return;
+      const shot = shots.shots.find(candidate => candidate.label === canvas.dataset.corner);
+      drawThumb(ctx, shot.rectRotated, size, preview);
+    });
+  }
+
+  // One thumbnail: the square `rect` (rotated px) scaled to size × size px.
+  function drawThumb(ctx, rect, size, preview) {
+    const toRotated = app.geometry.perspectiveToRotated;
+    ctx.save();
+    ctx.scale(size / rect.width, size / rect.height);
+    ctx.translate(-rect.x, -rect.y);
+    // Canvas transforms take (a, b, c, d, e, f) = the matrix's columns.
+    ctx.transform(
+      toRotated[0], toRotated[3],
+      toRotated[1], toRotated[4],
+      toRotated[2], toRotated[5],
+    );
+    ctx.scale(1 / preview.scale, 1 / preview.scale);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(CF.previewCanvas(app.state.levels || null), 0, 0);
+    ctx.restore();
+  }
+
+  /* ---------- the sheet: building and binding ---------- */
+
+  // The four live thumbnails in a row: one canvas per corner, which drawThumbs finds by its
+  // data-corner.
+  function buildThumbnails() {
+    const canvases = THUMBNAILS.map(thumbnail => makeEl('canvas', {
+      'data-corner': thumbnail.corner,
+      role: 'img',
+      'aria-label': thumbnail.label,
+    }));
+    return makeEl('div', { class: 'corner-thumbs' }, ...canvases);
+  }
+
+  // The save row: Share corners, the sheet's red main action, then Download corners. Where
+  // the browser can't share files, bindCornerShots hides Share and makes Download the red one.
+  function buildCornerSaveRow() {
+    return CF.buildControlRow('cornerSaveRow',
+      CF.buildActionButton({
+        id: 'btnCornerShare',
+        label: 'Share corners',
+        icon: 'share',
+        look: 'main',
+        size: 'tall',
+        isWide: true,
+        title: 'Share the corner shots (Save Image puts them in Photos)',
+      }),
+      CF.buildActionButton({
+        id: 'btnCornerDownload',
+        label: 'Download corners',
+        icon: 'download',
+        size: 'tall',
+        isWide: true,
+      }));
+  }
+
+  // Builds Corner shots' sheet into Export's section (called by the shell before any binding):
+  // the thumbnails, 4 photos | 1 sheet, the readout, the save row and the hint (frame CS1). It
+  // goes before Export's own options sheet, so a wide screen lists it first (frame DT6); while
+  // Export's sheet isn't built yet, it goes at the section's end, and the shell adds Export's
+  // after it.
+  function buildCornerShotsControls() {
+    const section = document.querySelector('section[data-panel="export"]');
+    const sheet = CF.buildSheet({ id: 'cornerShotsSheet', title: 'Corner shots' },
+      buildThumbnails(),
+      CF.buildSegmented({
+        id: 'cornerOutput',
+        label: 'Corner shots output',
+        options: OUTPUT_OPTIONS,
+      }),
+      makeEl('div', { class: 'corner-readout', id: 'cornerReadout' }),
+      buildCornerSaveRow(),
+      CF.buildSheetHint(CORNER_HINT));
+    section.insertBefore(sheet, byId('exportSheet'));
+  }
+
+  // The Corner shots button on Export: opens the Corner shots sheet. A wide screen lists it in
+  // the panel: there the panel scrolls only if the block is not wholly in view, and then by the
+  // least amount (its top wins when it is taller than the panel). Focus moves to the block's
+  // selected output choice either way, so the click always has a visible answer.
+  function openCornerShots() {
+    const layer = byId('cornerShotsSheet');
+    if (CF.phoneLayout.matches) {
+      CF.closeSheets();
+      CF.openSheet(layer);
+      return;
+    }
+    const panel = elements.panel;
+    const panelRect = panel.getBoundingClientRect();
+    const blockRect = layer.getBoundingClientRect();
+    const aboveTopPx = panelRect.top + CORNER_SCROLL_MARGIN_PX - blockRect.top;
+    const belowBottomPx = blockRect.bottom - (panelRect.bottom - CORNER_SCROLL_MARGIN_PX);
+    if (aboveTopPx > 0) panel.scrollTop -= aboveTopPx;
+    else if (belowBottomPx > 0) panel.scrollTop += Math.min(belowBottomPx, -aboveTopPx);
+    const selected = layer.querySelector('#cornerOutput [aria-pressed="true"]');
+    if (selected) selected.focus({ preventScroll: true });
+  }
+
+  // Wires the sheet's controls. Share shows only where the browser can share files, as for
+  // the main export (hidden, never greyed); there Download, always shown, is the red main
+  // action instead (frame CS3). The thumbnails draw as the sheet opens.
+  function bindCornerShots() {
+    app.cornerShotsOutput = storedOutput();
+    CF.bindSegmented(byId('cornerOutput'), setOutput);
+    const share = byId('btnCornerShare');
+    const download = byId('btnCornerDownload');
+    const canShare = CF.Exporter.canShare();
+    CF.updateActionButton(share, { isHidden: !canShare });
+    CF.updateActionButton(download, { look: canShare ? '' : 'main' });
+    download.onclick = () => saveCornerShots('download');
+    share.onclick = () => {
+      if (app.pendingCorners) shareCornerShots(app.pendingCorners);
+      else saveCornerShots('share');
+    };
+    byId('cornerShotsSheet').addEventListener('sheetopen', requestThumbs);
+  }
+
+  Object.assign(CF, {
+    buildCornerShotsControls,
+    openCornerShots,
+    bindCornerShots,
+    syncCornerShots,
+    saveCornerShots,
+  });
+})(window.CF);

@@ -1,0 +1,1765 @@
+/* P1Hunt Card Finisher styles. Loaded by index.html with ?v=<appVersion> for cache-busting.
+   Phone layout lives in the @media (max-width: 760px) block at the end; phone-only behaviors
+   stay inside it. */
+:root {
+  --bg: #161618;
+  --panel: #1f1f22;
+  --line: #3a3a40;
+  --text: #e8e8ea;
+  --accent: #e5322d;
+  --warn: #e3b341;
+  --stage: #2b2b2b;
+  /* The 1.10 parts' colors (they mirror CONFIG.theme): matte black, white and the one red
+     above; amber only on a warning. */
+  --page: #0b0b0c;
+  --surface: #161618;
+  --raised: #232326;
+  --control: #26262a;
+  --pressed: #3a3a40;
+  --edge: #2a2a2e;
+  --track: #4a4a52;
+  --grip: #8a8a92;
+  --ink: #f2f2f3;
+  --soft: #d6d6da;
+  --quiet: #a8abb2;
+  --scrim: rgba(0, 0, 0, .6);
+  /* The 1.10 layout's fixed heights (the tab bar adds the bottom safe area to its own). */
+  --top-bar-height: 48px;
+  --control-area-height: 200px;
+  --tab-bar-height: 52px;
+  /* The Resume card's drawn thumbnail: a card on a desk, never the real photo. */
+  --thumb-desk: #c9c4bc;
+  --thumb-card-front: #1b1d22;
+  --thumb-card-back: #dedad2;
+  --thumb-card-edge: #f4f2ee;
+}
+* { box-sizing: border-box; }
+/* The hidden attribute always wins: a class that sets display (a flex row) would otherwise
+   show a hidden element. */
+[hidden] { display: none !important; }
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+button, select, input { font: inherit; color: inherit; }
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  /* iOS: a long press (holding a handle, a nudge arrow, Hold to compare) must not start text
+     selection, the selection magnifier or the callout menu. Form fields keep normal selection. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input, select, textarea { -webkit-user-select: auto; user-select: auto; }
+
+/* ---- stage and panel ---- */
+main { flex: 1; display: flex; min-height: 0; }
+.stage {
+  flex: 1;
+  position: relative;
+  background: var(--stage);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+#view {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  outline: none;
+}
+/* The photo is a Tab stop (its handles step with Tab on Perspective): a ring inside its edge
+   when the keyboard brought focus there or Tab stepped a handle (`is-keyboard-focus`, set by
+   js/app/input.js), none after a click or touch. */
+#view:focus-visible, #view.is-keyboard-focus:focus {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+.panel {
+  width: 380px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+input[type="range"] {
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  accent-color: var(--accent);
+  touch-action: pan-y;
+}
+.mini {
+  width: 100%;
+  max-width: 280px;
+  aspect-ratio: 1;
+  background: var(--stage);
+  border-radius: 8px;
+  display: block;
+  margin: 0 auto 6px;
+}
+section[data-panel] { display: none; }
+section[data-panel].active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+/* ---- debug tuning panel ---- */
+/* The developer's detection tuning, built from the parts: a raised card with a small heading,
+   two small Action buttons, an icon button to close, and fields on the control color. */
+#debugPanel {
+  position: fixed;
+  right: 8px;
+  top: 64px;
+  width: 300px;
+  max-height: 75vh;
+  overflow: auto;
+  z-index: 20;
+  padding: 6px 12px 12px;
+  border-radius: 14px;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 12px;
+  accent-color: var(--ink);
+  scrollbar-width: thin;
+  scrollbar-color: var(--track) transparent;
+}
+.debug-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.debug-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--quiet);
+}
+#debugClose { width: 36px; height: 36px; border-radius: 18px; }
+.debug-actions { display: flex; gap: 6px; margin: 4px 0 8px; }
+#debugPanel label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0;
+}
+#debugPanel input[type="number"] {
+  width: 90px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--control);
+}
+#debugPanel pre { white-space: pre-wrap; font-size: 11px; color: var(--quiet); }
+
+/* =====================================================================
+   THE 1.10 PARTS. Fifteen parts build the new layout; each has its rules under its own banner
+   here and a module in js/app/parts/. They use their own colors (the second half of :root).
+   ===================================================================== */
+.icon {
+  display: block;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* Every part's buttons start from the same blank: no border, the part's own colors. */
+.icon-button, .step-tab, .grabber, .text-button, .tool, .action-button, .preset-chip, .segment,
+.nudge-key, .sheet-close, .sheet-row, .alert-cancel {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.icon-button:disabled, .step-tab:disabled, .text-button:disabled, .tool:disabled,
+.action-button:disabled, .preset-chip:disabled, .segment:disabled, .nudge-key:disabled {
+  opacity: .38;
+  cursor: default;
+}
+.icon-button:focus-visible, .step-tab:focus-visible, .grabber:focus-visible,
+.text-button:focus-visible, .tool:focus-visible, .action-button:focus-visible,
+.preset-chip:focus-visible, .segment:focus-visible, .nudge-key:focus-visible,
+.sheet-close:focus-visible, .sheet-row:focus-visible, .alert-cancel:focus-visible,
+.switch:focus-visible, .ruler:has(:focus-visible), .slider:has(:focus-visible) {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* ---- part: top bar ---- */
+.top-bar {
+  height: var(--top-bar-height);
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  background: var(--page);
+  color: var(--ink);
+}
+.icon-button {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+}
+.top-bar-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---- part: tab bar ---- */
+/* 52 px plus the bottom safe area. Its top hairline is drawn inside it, so it adds no height. */
+.tab-bar {
+  height: calc(var(--tab-bar-height) + env(safe-area-inset-bottom));
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding: 0 4px env(safe-area-inset-bottom);
+  background: var(--page);
+  box-shadow: inset 0 1px 0 var(--edge);
+}
+.step-tab {
+  position: relative;
+  height: var(--tab-bar-height);
+  min-width: 44px;
+  padding: 0 7px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--quiet);
+}
+.step-tab .icon { stroke-width: 1.6; }
+.step-tab[aria-selected="true"] { color: var(--ink); font-weight: 700; }
+.step-tab[aria-selected="true"] .icon { stroke-width: 2; }
+/* The unapplied-Levels mark: a white dot beside the icon. */
+.step-tab-mark {
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  margin-left: 9px;
+  border-radius: 4px;
+  background: var(--ink);
+  box-shadow: 0 0 0 2px var(--page);
+}
+
+/* ---- part: adjustment line (the control area and its three rows) ---- */
+.control-area {
+  position: relative;
+  height: var(--control-area-height);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 16px 0;
+  background: var(--surface);
+  border-top: 1px solid var(--edge);
+  color: var(--ink);
+}
+/* The grabber opens the step's sheet (drag it up, or tap it). Its tab rises 24 px over the
+   photo from the control area's top edge, so the area stays 200 px and the photo keeps its
+   size; the target runs 19 px on into the area, 44 px tall in all and 88 px wide. (It is
+   placed against the area's padding box, inside its 1 px top border.) */
+.grabber {
+  position: absolute;
+  left: 50%;
+  top: -25px;
+  z-index: 4;
+  width: 88px;
+  height: 44px;
+  margin-left: -44px;
+}
+/* A drag on the grabber, or on a sheet's top edge, moves the sheet: the browser must not
+   take it as a page pan (it would cancel the drag). */
+.grabber, .sheet-grabber, .sheet-header { touch-action: none; }
+/* An export's progress runs on across the tab's foot. */
+.control-area > .progress-line { z-index: 5; }
+/* The tab (the Sheet part's buildHandleTab; a sheet carries the same one): 80 px wide, in the
+   panel's color, outlined on its top and sides only. It reaches 1 px below the edge, over the
+   area's top border, so no line parts it from the panel. Pressed or dragged, it fills. */
+.handle-tab {
+  position: absolute;
+  left: 4px;
+  top: 0;
+  width: 80px;
+  height: 25px;
+  border: 1px solid var(--track);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: var(--surface);
+  pointer-events: none;
+}
+.is-pressed > .handle-tab, .sheet-layer.is-dragging .handle-tab { background: var(--pressed); }
+/* The glyph's center, in the middle of the tab's 24 px. The pill's lighter color (--soft) is
+   the white arms at 87% over the tab (--glyph-flat 1): the pair fades as one group, so where
+   the arms overlap there is no edge between them (a fade per arm left a faint seam). */
+.handle-glyph {
+  position: absolute;
+  left: 50%;
+  top: 11px;
+  opacity: calc(1 - .13 * var(--glyph-flat, 0));
+  transition: opacity 150ms linear;
+}
+/* Each arm is a 20 x 5 px bar posed by its transform: an up chevron of about 16 x 8 px with a
+   2 px stroke at rest; a sheet's open tab poses them as one 36 x 5 px pill (js/app/parts/
+   sheet.js poses them in between under a finger). */
+.handle-arm {
+  position: absolute;
+  left: -10px;
+  top: -2.5px;
+  width: 20px;
+  height: 5px;
+  border-radius: 2.5px;
+  background: var(--ink);
+  transform: translateX(-4px) rotate(-45deg) scale(.57, .4);
+  transition: transform 150ms ease-out;
+}
+.handle-arm.is-right { transform: translateX(4px) rotate(45deg) scale(.57, .4); }
+.label-row, .control-row {
+  height: 44px;
+  flex: none;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.line-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--quiet);
+}
+.line-value {
+  font-size: 17px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.line-spacer { flex: 1; }
+.line-readout {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--quiet);
+}
+.line-readout:empty, .line-value:empty { display: none; }
+.line-readout b { color: var(--ink); font-weight: 700; }
+.text-button {
+  height: 44px;
+  min-width: 44px;
+  padding: 0 2px;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.tool-row { height: 70px; flex: none; margin-top: 6px; display: flex; gap: 5px; }
+/* M3, a mode tap swaps the line (160 ms): the old rows fade out in 60 ms, then the new ones
+   rise 6 px and fade in over 100 ms, ease-out (CF.swapLine sequences the two). */
+.label-row.is-leaving, .control-row.is-leaving { opacity: 0; transition: opacity 60ms ease-out; }
+.label-row.is-entering, .control-row.is-entering { animation: line-in 100ms ease-out; }
+@keyframes line-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+/* M7, a step change: the new step's rows fade in over 120 ms, ease-out. The grabber's tab and
+   the progress line stay as they are; on a wide screen the inline options don't fade. */
+.control-area.is-arriving > :not(.grabber):not(.progress-line) {
+  animation: area-in 120ms ease-out;
+}
+@keyframes area-in {
+  from { opacity: 0; }
+}
+/* Reduced motion: both are instant (the global rule drops the animations; JS skips the wait). */
+@media (prefers-reduced-motion: reduce) {
+  .label-row.is-leaving, .control-row.is-leaving { opacity: 1; transition: none; }
+}
+
+/* ---- part: status ---- */
+.status-icon { flex: none; display: grid; color: var(--quiet); }
+.status-icon .icon { stroke-width: 2; }
+.status-line.is-warn .status-icon { color: var(--warn); }
+.status-line.is-error .status-icon { color: var(--accent); }
+/* At most two lines; a longer message is cut with an ellipsis. */
+.status-text {
+  flex: 1;
+  min-width: 0;
+  max-height: 34px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 13.5px;
+  line-height: 17px;
+  font-weight: 600;
+}
+
+/* ---- part: ruler ---- */
+.ruler {
+  position: relative;
+  height: 44px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  cursor: ew-resize;
+  touch-action: pan-y;
+}
+.ruler.is-disabled { opacity: .38; cursor: default; }
+/* The scale's left edge starts at the middle; ruler.js offsets it so zero is under the pointer
+   and slides it with a transform. */
+.ruler-scale { position: absolute; left: 50%; top: 0; display: block; max-width: none; }
+.ruler-tick { stroke: var(--grip); stroke-width: 1.5; }
+.ruler-tick.is-long { stroke: var(--soft); }
+.ruler-pointer {
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  width: 6px;
+  height: 28px;
+  margin-left: -3px;
+  border-radius: 3px;
+  background: var(--ink);
+  box-shadow: 0 0 0 2px var(--surface);
+  transition: transform 100ms ease-out;
+}
+/* 36 px while held. */
+.ruler.is-held .ruler-pointer { transform: scaleY(1.286); }
+/* The range input holds the value for the keyboard, screen readers and the tests; the drag is
+   handled by the ruler itself. */
+.ruler-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- part: slider ---- */
+.slider { position: relative; height: 44px; flex: 1; min-width: 0; display: block; }
+.slider::before, .slider-fill {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 20px;
+  height: 4px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.slider::before { right: 0; background: var(--track); }
+.slider-fill { background: var(--ink); }
+.slider input {
+  position: absolute;
+  inset: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.slider input:disabled { cursor: default; }
+.slider.is-disabled { opacity: .38; }
+.slider input::-webkit-slider-runnable-track { height: 44px; background: transparent; }
+.slider input::-moz-range-track { height: 44px; background: transparent; }
+.slider input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 11px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ink);
+  transition: transform 100ms ease-out;
+}
+.slider input::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ink);
+  transition: transform 100ms ease-out;
+}
+/* 30 px while held (slider.js sets is-held: :active does not match a range input under a
+   touch in Chrome). One selector per rule, since a browser drops a list with a foreign
+   pseudo-element. */
+.slider.is-held input::-webkit-slider-thumb { transform: scale(1.364); }
+.slider.is-held input::-moz-range-thumb { transform: scale(1.364); }
+
+/* ---- part: tool ---- */
+.tool {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 70px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 16px;
+  background: var(--control);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: -.2px;
+  white-space: nowrap;
+  /* Motion M12: a tool dims (disabled) and comes back in 120 ms. */
+  transition: opacity 120ms ease-out;
+}
+.tool:active:not(:disabled), .tool.is-flashing { background: var(--pressed); }
+.tool-glyph { display: grid; height: 22px; }
+.tool-value {
+  height: 22px;
+  line-height: 22px;
+  font-size: 16px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+/* A mode whose line is showing: a solid white fill. */
+.tool-mode[aria-pressed="true"],
+.tool-mode[aria-pressed="true"]:active:not(:disabled) {
+  background: var(--ink);
+  color: var(--page);
+  font-weight: 700;
+}
+.tool-mode[aria-pressed="true"] .icon { stroke-width: 2; }
+/* A switch that is on: a white ring, and On in its corner. The ring is drawn by ::after and
+   fades in and out in 120 ms (M12), since only opacity and transform animate. */
+.tool-switch::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--ink);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+.tool-switch[aria-pressed="true"]::after { opacity: 1; }
+.tool-state { position: absolute; top: 7px; right: 9px; font-size: 11px; font-weight: 800; }
+.tool-switch[aria-pressed="false"] .tool-state { color: var(--soft); }
+
+/* ---- part: action button ---- */
+.action-button {
+  position: relative;
+  height: 44px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 16px;
+  border-radius: 22px;
+  background: var(--control);
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.action-button .icon { stroke-width: 2; }
+.action-button.is-main { background: var(--accent); font-weight: 800; }
+.action-button.is-next { background: var(--ink); color: var(--page); font-weight: 800; }
+.action-button.is-quiet { background: var(--pressed); }
+.action-button.is-wide { flex: 1; min-width: 0; }
+.action-button.is-tall { height: 48px; border-radius: 24px; }
+.action-button.is-small { height: 36px; padding: 0 13px; font-size: 13.5px; }
+/* A small button still takes a 44 px tall touch. */
+.action-button.is-small::after { content: ''; position: absolute; inset: -4px 0; }
+
+/* ---- part: chip ---- */
+.chip-row { min-height: 44px; flex: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.preset-chip {
+  height: 44px;
+  flex: none;
+  padding: 0 16px;
+  border-radius: 22px;
+  background: var(--control);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.preset-chip[aria-pressed="true"] { background: var(--ink); color: var(--page); font-weight: 800; }
+
+/* ---- part: segmented control ---- */
+.segmented-control {
+  height: 44px;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  padding: 2px;
+  border-radius: 22px;
+  background: var(--control);
+}
+.segment {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* A choice is 40 px inside the control's 2 px rim; its touch reaches the full 44 px. */
+.segment::after { content: ''; position: absolute; inset: -2px 0; }
+.segment[aria-pressed="true"] { background: var(--ink); color: var(--page); font-weight: 800; }
+.segmented-control.is-fitted { flex: none; }
+.segmented-control.is-fitted .segment { flex: none; min-width: 44px; padding: 0 11px; }
+/* Where two controls share a row (Export's Size and Format): smaller labels, tighter sides. */
+.segmented-control.is-dense .segment { font-size: 13px; }
+.segmented-control.is-fitted.is-dense .segment { padding: 0 4px; }
+/* A swatch leading a choice (Levels' picks): dashed and empty until a color is picked. */
+.segment-swatch {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 2px dashed var(--quiet);
+  border-radius: 9px;
+}
+.segment-swatch.is-set { border: 2px solid currentColor; }
+/* Front | Back in the top bar: 112 × 36, each half in a 44 px tall touch. */
+.segmented-control.is-compact { height: 36px; flex: none; border-radius: 18px; }
+.segmented-control.is-compact .segment {
+  width: 54px;
+  flex: none;
+  border-radius: 16px;
+  font-size: 13px;
+}
+.segmented-control.is-compact .segment::after { content: ''; position: absolute; inset: -6px 0; }
+/* M8, Front | Back: the white fill is one pill (two equal halves inside the 2 px rim) that
+   slides 180 ms to the tapped side, decelerating into place. The labels' color and weight
+   change at once. Before the pill is placed (no data-index) it isn't shown. */
+.segmented-control.is-sliding { position: relative; }
+.segmented-control.is-sliding .segment[aria-pressed="true"] { background: transparent; }
+.segment-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc((100% - 4px) / 2);
+  border-radius: 16px;
+  background: var(--ink);
+  pointer-events: none;
+  transition: transform 180ms cubic-bezier(.2, .8, .2, 1);
+}
+.segmented-control:not([data-index]) .segment-thumb { display: none; }
+.segmented-control[data-index="1"] .segment-thumb { transform: translateX(100%); }
+.segmented-control.is-sliding.is-disabled .segment-thumb { opacity: .38; }
+/* Reduced motion: the pill jumps. */
+@media (prefers-reduced-motion: reduce) {
+  .segment-thumb { transition: none; }
+}
+
+/* ---- part: nudge pad ---- */
+.nudge-pad {
+  height: 44px;
+  flex: none;
+  display: flex;
+  border-radius: 22px;
+  background: var(--control);
+}
+.nudge-key {
+  width: 52px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 22px;
+  touch-action: none;
+}
+.nudge-key:active:not(:disabled) { background: var(--pressed); }
+
+/* ---- part: sheet ---- */
+/* Placed against the app's box (the whole screen), not fixed to the viewport. iOS 26 Safari
+   colors its own bar from whatever a fixed element shows at the screen's bottom edge, and a
+   sheet starts its rise from below that edge: the Corner shots sheet's red button was there at
+   that moment, and the bar stayed red. With nothing fixed, the bar keeps the page's color. */
+.sheet-layer { position: absolute; inset: 0; z-index: 30; }
+.sheet-scrim { position: absolute; inset: 0; background: var(--scrim); }
+/* At most about 470 px tall; taller content scrolls inside. */
+.sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: min(470px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px calc(28px + env(safe-area-inset-bottom));
+  border-radius: 18px 18px 0 0;
+  background: var(--surface);
+  color: var(--ink);
+}
+/* The sheet's grabber: the control area's tab, on the sheet's top edge, at the same place at
+   rest, with the same 44 px tall target for a drag down. */
+.sheet-grabber {
+  position: absolute;
+  left: 50%;
+  top: -24px;
+  width: 88px;
+  height: 44px;
+  margin-left: -44px;
+}
+.sheet-header {
+  height: 44px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: -6px;
+}
+.sheet-title, .sheet-heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.sheet-heading { margin: 4px 0 -4px; color: var(--quiet); }
+/* A 30 px circle in a 44 px touch. */
+.sheet-close {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 15px;
+  background: var(--pressed);
+}
+.sheet-close .icon { stroke-width: 2.2; }
+.sheet-close::after { content: ''; position: absolute; inset: -7px; }
+.sheet-body {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* A segmented control grows to fill a row (flex: 1). In a sheet's column that basis of 0
+   squeezed it to its text (Card orientation was 23.6 px tall): here it keeps its 44 px. */
+.sheet-body > .segmented-control { flex: none; }
+.sheet-list { flex: none; border-radius: 12px; background: var(--raised); }
+.sheet-row {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px 0 14px;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+.sheet-row.is-danger { font-weight: 700; }
+.sheet-row + .sheet-row { border-top: 1px solid var(--pressed); }
+.sheet-row-label { display: inline-flex; align-items: center; gap: 9px; }
+.sheet-row-detail {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--quiet);
+}
+.sheet-row-detail .icon { stroke-width: 2; }
+.sheet-row.is-danger .sheet-row-label .icon { color: var(--accent); }
+/* A checkbox drawn as a switch: white with a black knob while on. */
+.switch {
+  position: relative;
+  width: 50px;
+  height: 30px;
+  flex: none;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 15px;
+  background: var(--track);
+  cursor: pointer;
+}
+.switch::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--ink);
+  transition: transform 120ms ease-out;
+}
+.switch:checked { background: var(--ink); }
+.switch:checked::before { background: var(--page); transform: translateX(20px); }
+.sheet-hint { margin: 0; font-size: 12.5px; line-height: 17px; color: var(--quiet); }
+.sheet-tips { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+
+/* ---- part: alert card ---- */
+/* The layer is the dimmed backdrop; it takes every touch, so nothing behind it can be used. It
+   lies over an open sheet too (frames U4 and U5), so a question never closes one. Motion M9:
+   the dim (drawn by ::before, so it fades on its own) comes in 150 ms linear, the card in
+   180 ms from 96%; both go in 120 ms, while alert-card.js keeps the layer shown. A leaving
+   card takes no touch. */
+.alert-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.alert-layer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+.alert-layer.is-open::before { opacity: 1; transition-duration: 150ms; }
+.alert-layer:not(.is-open) { pointer-events: none; }
+/* A wide screen dims only the photo it is mounted over (the stage), so the card is centered
+   on the photo and the panel stays readable (frame DT7). */
+@media (min-width: 761px) {
+  .alert-layer { position: absolute; }
+}
+.alert-card {
+  position: relative;
+  width: 300px;
+  max-width: 100%;
+  padding: 22px 16px 6px;
+  border-radius: 18px;
+  background: var(--raised);
+  color: var(--ink);
+  opacity: 0;
+  transform: scale(.96);
+  transition: opacity 120ms linear, transform 120ms cubic-bezier(.4, 0, 1, 1);
+}
+.alert-layer.is-open .alert-card {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 180ms cubic-bezier(.2, .8, .2, 1),
+    transform 180ms cubic-bezier(.2, .8, .2, 1);
+}
+.alert-title { margin: 0; font-size: 18px; font-weight: 800; }
+.alert-text { margin: 8px 0 0; font-size: 14px; line-height: 19px; color: var(--soft); }
+.alert-choices { display: flex; gap: 8px; margin-top: 16px; }
+.alert-choices .action-button { padding: 0 8px; }
+.alert-cancel { width: 100%; height: 46px; font-size: 15px; font-weight: 600; color: var(--quiet); }
+
+/* ---- part: toast ---- */
+/* Over the photo's bottom edge: inset 16 px, 36 px up on the phone (12 px above the grabber's
+   24 px tab), above every other layer. core.js sets --toast-lift to the height of the photo an
+   open sheet covers, which puts the toast as far above that sheet's edge, so it clears the
+   sheet's tab too. The pill grows upward from its bottom edge, to three lines at most, and
+   never takes a touch. Motion M10: it rises 8 px as it fades in (160 ms) and fades out in
+   200 ms; one it replaces fades out in 80 ms; under reduced motion it only fades. */
+.toast-message {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 12px;
+  z-index: 50;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--ink);
+  color: var(--page);
+  font-size: 13.5px;
+  line-height: 18px;
+  font-weight: 600;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(calc(-1 * var(--toast-lift, 0px)));
+  transition: opacity 200ms linear, transform 200ms ease-out;
+}
+/* Shown, only the ride above a sheet is a transition: the fade in belongs to the rise. */
+.toast-message.is-shown {
+  opacity: 1;
+  transition: transform 200ms ease-out;
+  animation: toast-rise 160ms ease-out;
+}
+@keyframes toast-rise {
+  from { opacity: 0; transform: translateY(calc(8px - var(--toast-lift, 0px))); }
+}
+/* Reduced motion's fade in (the reduced motion block). */
+@keyframes toast-fade {
+  from { opacity: 0; }
+}
+/* A message being replaced: a copy of it (core.js) stays where it is and fades out in 80 ms
+   under the new one, which rises in as usual. */
+.toast-message.is-ghost { animation: none; opacity: 1; transition: opacity 80ms linear; }
+.toast-message.is-ghost.is-leaving { opacity: 0; }
+.toast-message.is-warn { background: var(--warn); }
+.toast-message.is-error { background: var(--accent); color: var(--ink); }
+.toast-icon { flex: none; display: grid; }
+.toast-icon:empty { display: none; }
+.toast-icon .icon { stroke-width: 2; }
+/* Three lines at most (frame T4); a longer message ends in an ellipsis. */
+.toast-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  /* A word wider than the pill (a long file name) breaks, so it is never cut at the edge. */
+  overflow-wrap: anywhere;
+}
+/* A wide screen: bottom center of the photo, 20 px up, as wide as its words up to 460 px
+   (frame DT10). */
+@media (min-width: 761px) {
+  .toast-message { bottom: 20px; width: fit-content; max-width: 460px; margin: 0 auto; }
+}
+@media (max-width: 760px) {
+  .toast-message { bottom: 36px; }
+}
+
+/* ---- part: progress line ---- */
+/* Scaled from its left end by progress-line.js, so it never causes a layout. */
+.progress-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  z-index: 3;
+  height: 3px;
+  background: var(--accent);
+  pointer-events: none;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 100ms linear;
+}
+.sheet .progress-line { top: 0; border-radius: 2px; }
+/* Motion M11: the export has ended, and the line fades out in 200 ms before it is hidden. */
+.progress-line.is-done {
+  opacity: 0;
+  transition: opacity 200ms linear, transform 100ms linear;
+}
+/* A new export starts from zero at once, not by shrinking back across the screen. */
+.progress-line.is-restarting { transition: none; }
+
+/* ---- reduced motion ---- */
+/* Travel and scaling go; short fades stay. Progress still moves, in steps, because it is
+   information. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition-property: opacity !important;
+  }
+  /* One selector per rule: a browser drops a whole selector list when one of its pseudo-
+     elements is foreign to it (Chrome and Safari reject ::-moz-range-thumb). */
+  .ruler.is-held .ruler-pointer { transform: none; }
+  .slider.is-held input::-webkit-slider-thumb { transform: none; }
+  .slider.is-held input::-moz-range-thumb { transform: none; }
+  /* Sheets (M1, M2): no slide. The dim fades in 120 ms; a closing sheet fades where it is, then
+     drops to its resting place in one step (a delayed jump, so sheet.js still sees its
+     transitionend), with its tab. */
+  .sheet-layer .sheet-scrim { transition-duration: 120ms !important; }
+  .sheet-layer .sheet::before,
+  .sheet-layer .sheet > :not(.sheet-grabber) { transition-duration: 120ms !important; }
+  .sheet-layer:not(.is-open):not(.is-dragging) .sheet {
+    transition: transform 0s linear 120ms !important;
+  }
+  /* Under a finger nothing is eased, here either: the rules above must not outrank the drag's. */
+  .sheet-layer.is-dragging .sheet-scrim,
+  .sheet-layer.is-dragging .sheet::before,
+  .sheet-layer.is-dragging .sheet > :not(.sheet-grabber) { transition: none !important; }
+  /* Cards (M9): fade only, 100 ms. */
+  .alert-layer .alert-card { transform: none; }
+  .alert-layer::before, .alert-layer .alert-card { transition-duration: 100ms !important; }
+  /* Toasts (M10): a new message fades in, from nothing even when it replaces one. */
+  .toast-message.is-shown {
+    animation: toast-fade 160ms linear !important;
+    /* No transition while shown: the fade out of the message it replaces would run on under
+       the fade in (only the ride above a sheet is a transition here, and it does not travel). */
+    transition: none !important;
+  }
+  .toast-message.is-ghost {
+    animation: none !important;
+    transition: opacity 80ms linear !important;
+  }
+  /* Progress (M11): gone at once when the export ends. */
+  .progress-line.is-done { transition: none !important; }
+  /* Tools (M12): the switch's ring and the dimming are instant. */
+  .tool, .tool-switch::after { transition: none !important; }
+}
+
+/* =====================================================================
+   THE 1.10 SHELL. The top bar, the photo, each step's control area and options sheet, and the
+   tab bar, arranged for the phone (under 761 px wide) and for a wide screen (the steps in the
+   top bar, a 380 px side panel with every option listed inline). The parts above keep their
+   own look; these rules only place them.
+   ===================================================================== */
+.top-bar-host { flex: none; }
+.tab-bar-host { flex: none; }
+.workspace { flex: 1; display: flex; min-height: 0; }
+.panel { background: var(--surface); }
+.top-bar-brand, .top-bar-steps, .icon-button-label { display: none; }
+
+/* The grabber's target straddles the area's top edge; where it overlaps a control in the
+   label row (Rotate's angle, for one), the control takes the tap. Plain text in the row
+   doesn't, so the grabber keeps its full 44 px there. */
+.control-area .label-row > :is(button, input, .slider, .segmented-control) {
+  position: relative;
+  z-index: 5;
+}
+
+/* ---- shell: the start screen ---- */
+.start-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 32px 24px;
+  background: var(--page);
+  color: var(--ink);
+  text-align: center;
+}
+.start-icon { display: block; width: 76px; height: 76px; }
+.start-eyebrow {
+  margin-top: 18px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--quiet);
+}
+.start-title {
+  margin: 20px 0 0;
+  font-size: 30px;
+  line-height: 34px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+}
+.start-text { margin: 10px 0 0; font-size: 15px; line-height: 21px; color: var(--quiet); }
+.start-open { width: 326px; max-width: 100%; margin-top: 30px; }
+.resume-card:not([hidden]) ~ .start-open { margin-top: 12px; }
+.resume-card {
+  width: 326px;
+  max-width: 100%;
+  margin-top: 26px;
+  padding: 16px;
+  border-radius: 18px;
+  background: var(--surface);
+  text-align: left;
+}
+.resume-who { display: flex; align-items: center; gap: 12px; }
+/* A drawn card on a desk (two side by side for a pair): never the real photo. */
+.resume-thumb {
+  width: 44px;
+  height: 56px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 6px;
+  background: var(--thumb-desk);
+}
+.resume-thumb.is-pair { width: 60px; }
+.resume-thumb i {
+  width: 24px;
+  height: 34px;
+  border: 2px solid var(--thumb-card-edge);
+  border-radius: 2px;
+  background: var(--thumb-card-front);
+}
+.resume-thumb i + i { display: none; background: var(--thumb-card-back); }
+.resume-thumb.is-pair i + i { display: block; }
+.resume-when {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--quiet);
+}
+.resume-name { margin-top: 2px; font-size: 15px; font-weight: 700; color: var(--ink); }
+.resume-name b { word-break: break-all; }
+.resume-choices { display: flex; gap: 8px; margin-top: 14px; }
+
+/* ---- shell: the drop outline ---- */
+/* A file dragged over the photo area: a white dashed outline that says what a drop does. */
+.stage.drag-over::after {
+  content: 'Drop to open';
+  position: absolute;
+  inset: 10px;
+  z-index: 3;
+  display: grid;
+  place-items: end center;
+  padding-bottom: 22px;
+  border: 2px dashed var(--ink);
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  pointer-events: none;
+}
+#app.has-img[data-tab="overlay"] .stage.drag-over::after { content: 'Drop to add as the logo'; }
+
+/* ---- shell: sheets open and close (motion M1) ---- */
+/* The sheet is the control area's drawer. Closed, it rests unseen but for its tab, with its
+   top edge on the control area's (--sheet-rest: how much of it stays below that edge) and its
+   tab on the area's (which hides meanwhile, in the phone block); opening, it fades in and
+   rises from there, so there is one handle, not two. Open 280 ms, fast then settling; close
+   200 ms, starting off and settling into rest, where its tab stays in view (the plan's curve
+   accelerated away and stopped the tab dead). A finger drag has no easing (.is-dragging). */
+.sheet-layer {
+  --sheet-rest: calc(
+    var(--control-area-height) + var(--tab-bar-height) + env(safe-area-inset-bottom)
+  );
+}
+.sheet-layer .sheet {
+  transform: translateY(calc(100% - var(--sheet-rest)));
+  transition: transform 200ms cubic-bezier(.4, 0, .2, 1);
+}
+.sheet-layer .sheet-scrim { opacity: 0; transition: opacity 200ms linear; }
+.sheet-layer.is-open .sheet {
+  transform: none;
+  transition: transform 280ms cubic-bezier(.2, .8, .2, 1);
+}
+.sheet-layer.is-open .sheet-scrim { opacity: 1; transition-duration: 280ms; }
+.sheet-layer.is-dragging .sheet,
+.sheet-layer.is-dragging .sheet-scrim { transition: none; }
+/* The tab's glyph: an up chevron while the sheet is closed or closing, a pill once it is open
+   (its close button already says close), in 150 ms. sheet.js poses it under a finger. */
+.sheet-layer.is-open .handle-glyph { --glyph-flat: 1; }
+.sheet-layer.is-open .handle-arm { transform: translateX(-8px) rotate(0deg) scale(1, 1); }
+.sheet-layer.is-open .handle-arm.is-right { transform: translateX(8px) rotate(0deg) scale(1, 1); }
+.sheet-layer.is-dragging .handle-arm,
+.sheet-layer.is-dragging .handle-glyph { transition: none; }
+@media (max-width: 760px) {
+  /* Everything but the tab fades: the panel's color (drawn by ::before, so the tab can stay
+     opaque inside it) and its contents. A drag sets the fade (--sheet-fade, sheet.js). */
+  .sheet { background: transparent; isolation: isolate; }
+  .sheet::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: var(--surface);
+  }
+  .sheet-layer .sheet::before,
+  .sheet-layer .sheet > :not(.sheet-grabber) { opacity: 0; transition: opacity 200ms linear; }
+  .sheet-layer.is-open .sheet::before,
+  .sheet-layer.is-open .sheet > :not(.sheet-grabber) {
+    opacity: 1;
+    transition: opacity 120ms linear;
+  }
+  .sheet-layer.is-dragging .sheet::before,
+  .sheet-layer.is-dragging .sheet > :not(.sheet-grabber) {
+    opacity: var(--sheet-fade, 1);
+    transition: none;
+  }
+}
+/* The keyboard help is for a wide screen only. */
+.sheet-tips-heading, .sheet-keys { display: none; }
+/* A phone-only tip (a touch gesture, say) is left out on a wide screen, and so is a tips group
+   that holds only such tips (Rich, 2026-11-15). */
+@media (min-width: 761px) {
+  .sheet-tips > .sheet-hint.is-phone-only,
+  .sheet-body > .sheet-tips-group.is-phone-only { display: none; }
+}
+
+/* ---- step: Perspective ---- */
+/* Owned by js/app/perspective.js's phase. Phone-only and wide-only rules go in a
+   media block inside this banner (max-width: 760px or min-width: 761px). */
+/* Preview's two grey lines (in the label row and the control row): at most two lines each in
+   their 44 px row, as the status text is. */
+.perspective-note {
+  flex: 1;
+  min-width: 0;
+  max-height: 34px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+  line-height: 17px;
+  color: var(--quiet);
+}
+/* The Result preview: a wide screen only (frame DT3), between the control area and the
+   options listed inline. */
+.perspective-result { display: none; }
+@media (min-width: 761px) {
+  .perspective-result {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px 4px;
+    border-top: 1px solid var(--edge);
+  }
+  .perspective-result .sheet-heading { margin: 0; }
+  /* The panel's width at 150 px tall, the card centered (frame DT3). drawMini sizes the bitmap
+     to this box, so it is never stretched. */
+  .perspective-result .mini {
+    width: 100%;
+    max-width: none;
+    height: 150px;
+    aspect-ratio: auto;
+    margin: 0;
+  }
+}
+
+/* ---- step: Rotate ---- */
+/* Owned by js/app/rotate.js's phase. Phone-only and wide-only rules go in a
+   media block inside this banner (max-width: 760px or min-width: 761px). */
+/* The angle is a button (it opens the typed angle): a 44 px target, its text underlined with
+   dots and followed by a pencil (frame R1). */
+.rotate-angle {
+  height: 44px;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.rotate-angle:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.rotate-angle:disabled { opacity: .38; cursor: default; }
+.rotate-angle-face {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 1px;
+  border-bottom: 2px dotted var(--quiet);
+}
+.rotate-angle-face .icon { stroke-width: 2; color: var(--quiet); }
+/* The typed angle's field, where the angle was. 17 px text: under 16 px, iOS zooms the page. */
+.rotate-angle-field {
+  width: 88px;
+  height: 36px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--control);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.rotate-angle-field:focus { outline: 2px solid var(--ink); outline-offset: 0; }
+/* ± is one character: a small button that narrow would be under 44 px wide. */
+#btnAngleSign { min-width: 44px; }
+/* Holds the label row's place while it is lifted, so the ruler doesn't move. */
+.rotate-lift-gap { height: 44px; flex: none; }
+@media (max-width: 760px) {
+  /* While the angle is typed, the label row rides on the keyboard's top edge: rotate.js sets
+     its top from the visual viewport (frame R3). */
+  .label-row.is-lifted {
+    position: fixed;
+    left: 0;
+    right: 0;
+    z-index: 30;
+    height: 56px;
+    padding: 6px 16px;
+    background: var(--raised);
+    border-top: 1px solid var(--edge);
+  }
+}
+
+/* ---- step: Crop ---- */
+/* Owned by js/app/crop.js's phase. Phone-only and wide-only rules go in a
+   media block inside this banner (max-width: 760px or min-width: 761px). */
+
+/* ---- step: Levels ---- */
+/* Owned by js/app/levels.js's phase. Phone-only and wide-only rules go in a
+   media block inside this banner (max-width: 760px or min-width: 761px). */
+/* The instruction between Discard and Apply (frame L1): centered in what the two buttons
+   leave, on one line where it fits and two where it doesn't (a 375 px phone), as the status
+   text is. It takes half of the row's gap on each side and is set at 12.5 px (the sheet's
+   hint size), which the longest line, "Hold the photo to compare", needs to stay whole at
+   390 px. It is never a tap target, so the grabber it sits under still takes its tap. */
+.levels-hint {
+  flex: 1;
+  min-width: 0;
+  max-height: 34px;
+  margin: 0 -4px;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 17px;
+  text-align: center;
+  color: var(--quiet);
+  pointer-events: none;
+}
+
+/* ---- step: Overlay ---- */
+/* Owned by js/app/overlay.js's phase. Phone-only and wide-only rules go in a
+   media block inside this banner (max-width: 760px or min-width: 761px). */
+/* The hint in the label row while no logo is placed: grey, at most two lines in its 44 px
+   row, as the status text is. */
+.overlay-hint {
+  flex: 1;
+  min-width: 0;
+  max-height: 34px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+  line-height: 17px;
+  color: var(--quiet);
+}
+/* The saved logo's thumbnail, on flat checker squares so a white logo shows (frame O2). */
+.overlay-saved-thumb {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  object-fit: contain;
+  border-radius: 8px;
+  background: repeating-conic-gradient(var(--edge) 0 25%, var(--surface) 0 50%) 0 0 / 12px 12px;
+}
+/* Use saved overlay and Add logo share one control row, so the tool row fits under them in
+   the 200 px area. Each grows from its own width, with less side padding, so both fit beside
+   the thumbnail on a 375 px phone. */
+#overlayAddRow .action-button { flex: 1 1 auto; padding: 0 10px; }
+/* Wide enough for 100%, so the slider beside it keeps its length while it is dragged. */
+.overlay-opacity-value { min-width: 56px; text-align: right; }
+/* Four tools across (three 5 px gaps). While only Delete saved shows, it keeps its width and
+   its place at the right end. */
+#overlayTools { justify-content: flex-end; }
+#overlayTools .tool { flex: 0 0 calc((100% - 15px) / 4); }
+
+/* ---- step: Export ---- */
+/* Owned by js/app/export-controls.js's phase. Phone-only and wide-only rules go in a
+   media block inside this banner (max-width: 760px or min-width: 761px). */
+/* Four rows in the area's 200 px: 44, 44, 48 and 44, with the area's 4 px between them
+   (frame E1). Its rows keep 6 px between their controls. */
+#exportArea .control-row { gap: 6px; }
+/* Size at the left edge, Format at the right. The grabber's target reaches 20 px down into
+   this row; a choice under it takes the tap (as a control in a label row does), so every
+   choice keeps its 44 px and the grabber keeps the strip above them. */
+#exportChoices { justify-content: space-between; }
+#exportChoices .segmented-control { position: relative; z-index: 5; }
+/* The readout, with any notes under it. */
+.export-readout-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.export-readout {
+  flex: none;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--quiet);
+}
+.export-readout:empty { display: none; }
+.export-readout b { color: var(--ink); font-weight: 700; }
+.export-notes { flex: none; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+/* A note: white text led by the amber warning mark (frame E4). */
+.export-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: 12.5px;
+  line-height: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.export-note .icon { color: var(--warn); stroke-width: 2.2; }
+@media (max-width: 760px) {
+  /* The row is 44 px: a readout line and one note of two lines, never cut. So only the first
+     note shows (the next comes when it is dealt with), and while one shows the readout keeps
+     to one line by dropping its "not upscaled" tail. A wide screen lets the row grow instead. */
+  .export-readout-column { max-height: 44px; overflow: hidden; }
+  .export-note + .export-note { display: none; }
+  .export-readout-column:has(.export-note) .export-readout-tail { display: none; }
+  /* Beside a pair's Together | Separately the column is narrow: the note takes its three
+     lines and the readout waits until the note is gone. */
+  #exportReadoutRow:has(#pairOutput:not([hidden])) .export-readout-column:has(.export-note)
+    .export-readout { display: none; }
+  /* The grabber's target reaches 20 px down into the first row, where Size and Format take
+     the tap. It gets those 20 px back above its tab, over the photo, so its strip is still
+     44 px. */
+  #exportArea > .grabber::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    height: 20px;
+  }
+  /* The tallest sheet. Closer rows, smaller hints and less empty space under the last row let
+     everything down to Tips show without a scroll (frame E11). */
+  #exportSheet .sheet-body { gap: 4px; margin-bottom: -16px; }
+  #exportSheet .sheet-hint { font-size: 12px; line-height: 15px; }
+}
+/* The save row is 48 px (its buttons are the tall ones). With less side padding, "Share now"
+   keeps its whole label beside Download and Copy on a 375 px phone. */
+#exportSaveRow { height: 48px; }
+#exportSaveRow .action-button { padding: 0 12px; }
+/* The bottom row's three buttons share the width (frame E6). */
+#exportMoreRow .action-button { padding: 0 6px; font-size: 14px; }
+/* Next card's arrow follows its label. */
+#btnNextCard { flex-direction: row-reverse; }
+/* A row of the sheet with the phone's own picker: the <select> or color input covers the
+   row, unseen, so a tap anywhere on the row opens it. */
+.export-picker-row { position: relative; }
+.export-picker {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.export-picker-row:has(:focus-visible) { outline: 2px solid var(--ink); outline-offset: -2px; }
+.export-picker-row:has(:disabled) { opacity: .38; }
+/* Fill's swatch (frame E11): the color, or flat checker squares for Transparent. */
+.export-fill-swatch {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-right: 3px;
+  border: 1px solid var(--track);
+  border-radius: 4px;
+}
+.export-fill-swatch.is-transparent {
+  background: repeating-conic-gradient(var(--track) 0 25%, var(--ink) 0 50%) 0 0 / 8px 8px;
+}
+/* Quality: the slider between its name and its percent. */
+.export-quality-row { cursor: default; }
+.export-quality-row .slider { margin: 0 6px; }
+.export-quality-value {
+  min-width: 38px;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+/* With Quality hidden (PNG), Interpolation is the list's first row and has no line above. */
+#qualityRow[hidden] + .sheet-row { border-top: 0; }
+#editsPairHint { color: var(--ink); }
+/* The source line and the version, one under the other, in the sheet's smallest type; a long
+   file name wraps anywhere. */
+.export-info-line { display: block; font-size: 12px; line-height: 15px; overflow-wrap: anywhere; }
+@media (min-width: 761px) {
+  /* Corner shots is listed before Export's options in the side panel (frame DT6). */
+  #exportSheet { order: 1; }
+  /* The panel has the room, so the readout row grows to hold a long readout and every note
+     (beside a pair's Together | Separately its column is narrow) instead of cutting at 44 px. */
+  #exportReadoutRow { height: auto; min-height: 44px; }
+}
+
+/* ---- step: Corner shots ---- */
+/* Owned by js/app/corner-shots.js. Its own sheet in Export's section (frames CS1 to CS6):
+   the thumbnails, 4 photos | 1 sheet, the readout, the save row and the hint. */
+/* Four live thumbnails in a row: tl tr bl br. */
+.corner-thumbs {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.corner-thumbs canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  background: var(--stage);
+}
+/* One line; it keeps its height while empty (invalid corners), so nothing under it moves. */
+.corner-readout {
+  min-height: 17px;
+  flex: none;
+  font-size: 13px;
+  line-height: 17px;
+  font-variant-numeric: tabular-nums;
+  color: var(--quiet);
+}
+.corner-readout b { color: var(--ink); font-weight: 700; }
+/* The save row is 48 px, for its tall buttons. Each grows from its own width, with less side
+   padding, so "Download corners" keeps its whole label beside Share on a 375 px phone. */
+#cornerSaveRow { height: 48px; }
+#cornerSaveRow .action-button { flex: 1 1 auto; padding: 0 10px; }
+@media (min-width: 761px) {
+  /* Listed inline in the panel: its progress line still sits on its own top edge. */
+  #cornerShotsSheet .sheet { position: relative; }
+}
+
+/* ---- shell: the phone ---- */
+@media (max-width: 760px) {
+  .workspace { flex-direction: column; }
+  /* The sheets fill the app's box, so the panel they sit in is not their containing block. */
+  #app { position: relative; }
+  .panel { width: auto; flex: none; border: 0; position: static; }
+  /* A sheet at rest lies below the screen's bottom edge: cut there, so it adds no scroll. */
+  .sheet-layer { overflow: hidden; }
+  /* An open sheet always reaches above the control area it rose from. */
+  .sheet { min-height: calc(var(--sheet-rest) + 72px); }
+  /* While a sheet is rising, open or closing, its tab stands in for the control area's: at
+     once, so there is never one tab too many or too few. */
+  #app:has(.sheet-layer:not([hidden])) .grabber > .handle-tab { opacity: 0; }
+  /* Rotate's angle sits under the grabber's left half and takes the taps there (as Size and
+     Format do on Export, whose rule is in its own block): the grabber's target gets that strip
+     back above its tab, so it is 44 px tall across its whole width. */
+  #rotateArea > .grabber::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    height: 20px;
+  }
+  /* No bars before a photo: nothing in them would work. */
+  #app:not(.has-img) .top-bar-host,
+  #app:not(.has-img) .panel,
+  #app:not(.has-img) .tab-bar-host { display: none; }
+  /* The tuning panel sits above the control area. */
+  #debugPanel {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    top: auto;
+    bottom: calc(
+      var(--control-area-height) + var(--tab-bar-height) + env(safe-area-inset-bottom) + 8px
+    );
+    max-height: 40vh;
+  }
+}
+
+/* ---- shell: a wide screen ---- */
+@media (min-width: 761px) {
+  .top-bar {
+    height: 56px;
+    gap: 8px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--edge);
+  }
+  .top-bar-brand {
+    order: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: 8px;
+    font-size: 15px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  #btnOpen {
+    order: 2;
+    width: auto;
+    height: 36px;
+    gap: 6px;
+    display: inline-flex;
+    padding: 0 13px;
+    border-radius: 18px;
+    background: var(--control);
+    font-size: 13.5px;
+    font-weight: 700;
+  }
+  #btnOpen .icon { width: 18px; height: 18px; stroke-width: 2; }
+  .icon-button-label { display: inline; }
+  .top-bar-steps { order: 3; flex: 1; display: flex; justify-content: center; min-width: 0; }
+  .top-bar-center { order: 4; flex: none; gap: 4px; }
+  #btnUndo { order: 5; }
+  #btnRedo { order: 6; }
+  #btnFit { order: 7; }
+  /* The steps: text tabs in a pill, the open one white. */
+  .top-bar-steps .tab-bar {
+    height: 40px;
+    padding: 2px;
+    border-radius: 20px;
+    background: var(--control);
+    box-shadow: none;
+  }
+  .top-bar-steps .step-tab {
+    height: 36px;
+    flex-direction: row;
+    gap: 0;
+    padding: 0 16px;
+    border-radius: 18px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--soft);
+  }
+  .top-bar-steps .step-tab .icon { display: none; }
+  .top-bar-steps .step-tab[aria-selected="true"] {
+    background: var(--ink);
+    color: var(--page);
+    font-weight: 800;
+  }
+  .top-bar-steps .step-tab-mark {
+    position: static;
+    margin-left: 7px;
+    box-shadow: none;
+  }
+  .top-bar-steps .step-tab[aria-selected="true"] .step-tab-mark { background: var(--page); }
+  /* The side panel: the step's control area, then its options, always open. */
+  /* Its scrollbar is thin and dark, and its gutter is always kept, so the content is the same
+     width on every step whether or not the panel scrolls. */
+  .panel {
+    width: 380px;
+    overflow-y: auto;
+    border-left: 1px solid var(--edge);
+    scrollbar-width: thin;
+    scrollbar-color: var(--track) transparent;
+    scrollbar-gutter: stable;
+  }
+  #app:not(.has-img) section[data-panel] { display: none; }
+  .control-area {
+    height: auto;
+    padding-bottom: 14px;
+    border-top: 0;
+  }
+  .grabber { display: none; }
+  .sheet-layer { position: static; }
+  .sheet-scrim, .sheet-grabber, .sheet-close, .sheet-tips-group > .sheet-list { display: none; }
+  .sheet {
+    position: static;
+    max-height: none;
+    padding: 12px 16px 16px;
+    border-top: 1px solid var(--edge);
+    border-radius: 0;
+    background: transparent;
+  }
+  .sheet-layer .sheet { opacity: 1; transform: none; transition: none; }
+  .sheet-header { height: auto; margin-bottom: 0; }
+  .sheet-title { color: var(--quiet); }
+  .sheet-body { overflow: visible; }
+  .sheet-tips.sheet-tips[hidden] { display: flex !important; }
+  .sheet-tips { margin-top: 0; }
+  .sheet-tips-heading, .sheet-keys { display: block; }
+  /* "Tips and keys" is its own block at the end of the options: a line across the panel, as
+     between the panel's other blocks, and 12 px above its heading (frames DT3 and DT5). */
+  .sheet-body > .sheet-tips-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0 -16px;
+    padding: 12px 16px 0;
+    border-top: 1px solid var(--edge);
+  }
+  /* Where the options hold only the tips (Overlay), the sheet's own line and heading would
+     stand over nothing: the tips block takes the sheet's place under its line. */
+  .sheet:has(> .sheet-body > .sheet-tips-group:only-child) > .sheet-header { display: none; }
+  .sheet-body > .sheet-tips-group:only-child { margin: 0; padding: 0; border-top: 0; }
+  #debugPanel { right: 388px; top: 64px; }
+}
+/* The top bar on a narrower wide screen. In full it needs 1094 px with a pair open, 1109 with
+   Levels' mark too. Up to 1119 px the name and Open's label go (the icons stay) and the step
+   tabs close in: about 860 px with a pair. Measured with the steps' longest labels, Fit shown. */
+@media (min-width: 761px) and (max-width: 1119px) {
+  .top-bar-brand { gap: 0; margin-right: 0; font-size: 0; }
+  #btnOpen { width: 44px; padding: 0; justify-content: center; }
+  .icon-button-label { display: none; }
+  .top-bar-steps .step-tab { padding: 0 10px; }
+}
+/* Under 900 px the app's icon goes too, the gaps halve and the labels drop a size: about 740 px
+   with a pair, so the bar fits from 761 px. Every control stays at least 36 px. */
+@media (min-width: 761px) and (max-width: 899px) {
+  .top-bar { gap: 4px; padding: 0 8px; }
+  .top-bar-brand { display: none; }
+  .top-bar-steps .step-tab { padding: 0 7px; font-size: 13px; }
+  .top-bar-steps .step-tab-mark { margin-left: 5px; }
+}
+
+/* ---- shell: hover ---- */
+/* A mouse only: a phone reports no hover, so a tap never leaves a fill behind. Filled controls
+   lighten to the pressed color; transparent ones take a quiet fill, one step lighter than what
+   they sit on. The red main action and the white selected states keep their color, and a
+   disabled control never answers. */
+@media (hover: hover) {
+  .tool:hover:not(:disabled, .tool-mode[aria-pressed="true"]),
+  .action-button:hover:not(:disabled, .is-main, .is-next, .is-quiet),
+  .preset-chip:hover:not(:disabled, [aria-pressed="true"]) {
+    background: var(--pressed);
+  }
+  /* On the control color already (a segmented control, the nudge pad, the steps' pill). */
+  .segment:hover:not(:disabled, [aria-pressed="true"]),
+  .nudge-key:hover:not(:disabled),
+  .top-bar-steps .step-tab:hover:not(:disabled, [aria-selected="true"]) {
+    background: var(--pressed);
+  }
+  /* On the page, the panel or a list. */
+  .icon-button:hover:not(:disabled),
+  .step-tab:hover:not(:disabled, [aria-selected="true"]),
+  .text-button:hover:not(:disabled) {
+    background: var(--control);
+  }
+  .text-button:hover:not(:disabled) { border-radius: 10px; }
+  .sheet-row:hover { background: var(--pressed); }
+  .sheet-list > .sheet-row:first-child:hover { border-radius: 12px 12px 0 0; }
+  .sheet-list > .sheet-row:last-child:hover { border-radius: 0 0 12px 12px; }
+  .sheet-list > .sheet-row:only-child:hover { border-radius: 12px; }
+}
+/* Open is a filled pill on a wide screen. */
+@media (hover: hover) and (min-width: 761px) {
+  #btnOpen:hover:not(:disabled) { background: var(--pressed); }
+}
+
+/* ---- narrow screens ---- */
+@media (max-width: 760px) {
+  main { flex-direction: column; }
+
+  /* ---- the 1.10 parts on the phone ---- */
+  /* Crop presets: one row that scrolls sideways and runs off the right edge, so it reads as
+     scrollable. Wide screens wrap instead, since a mouse can't swipe. */
+  .chip-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-right: -16px;
+    padding-right: 16px;
+  }
+  .chip-row::-webkit-scrollbar { display: none; }
+  /* A question is centered over the photo: between the top bar and the control area. The
+     backdrop still dims the whole screen. */
+  .alert-layer {
+    padding-top: calc(var(--top-bar-height) + env(safe-area-inset-top));
+    padding-bottom: calc(
+      var(--control-area-height) + var(--tab-bar-height) + env(safe-area-inset-bottom)
+    );
+  }
+}
+/* Phones under 390 px wide: the six tab labels drop a size to fit. */
+@media (max-width: 389px) {
+  .step-tab { padding: 0 5px; font-size: 11px; }
+}

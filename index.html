@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Content Security Policy: only this site's own scripts and styles run; photos and logos are
+     local blob: URLs; the engine worker is a blob: built from js/engine.js. Nothing is fetched
+     from anywhere else. GitHub Pages can't send headers, so this is a meta tag (which can't set
+     frame-ancestors). Keep it before the first <link>/<script>. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src blob:; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#161618">
+<title>P1Hunt Card Finisher</title>
+<!-- App icon: favicon.ico for Safari on Mac and older browsers, the SVG for the rest, and
+     the 180 px PNG for the iPhone home screen. All three are drawn from icons/icon.svg. -->
+<link rel="icon" href="icons/favicon.ico?v=1.10.0-dev.16" sizes="32x32">
+<link rel="icon" href="icons/icon.svg?v=1.10.0-dev.16" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=1.10.0-dev.16">
+<!-- PWA (phase two): this becomes a real file; a service worker can't be inlined.
+<link rel="manifest" href="manifest.webmanifest">
+-->
+<link rel="stylesheet" href="css/app.css?v=1.10.0-dev.16">
+</head>
+<body>
+<div id="app">
+  <!-- The top bar (js/app/parts/top-bar.js), built here by js/app/shell.js. -->
+  <div class="top-bar-host" id="topBarHost"></div>
+
+  <main class="workspace">
+    <div class="stage" id="stage">
+      <canvas id="view" tabindex="0" aria-label="Photo editing canvas"></canvas>
+      <!-- The start screen: no bars on the phone until a photo is open. -->
+      <div class="start-screen" id="empty">
+        <img class="start-icon" src="icons/icon.svg?v=1.10.0-dev.16" alt="" width="76" height="76">
+        <span class="start-eyebrow">P1Hunt Card Finisher</span>
+        <h1 class="start-title">Finish a card photo</h1>
+        <p class="start-text">Open, drop, or paste a photo.<br>
+          Everything stays on this device.</p>
+        <div class="resume-card" id="resume" hidden>
+          <div class="resume-who">
+            <span class="resume-thumb" id="resumeThumb"><i></i><i></i></span>
+            <div>
+              <span class="resume-when" id="resumeWhen"></span>
+              <div class="resume-name">Resume <b id="resumeName"></b>?</div>
+            </div>
+          </div>
+          <div class="resume-choices">
+            <button class="action-button is-main is-tall is-wide" id="btnResume" type="button">
+              <span class="action-label">Resume</span>
+            </button>
+            <button class="action-button is-tall is-wide" id="btnFresh" type="button">
+              <span class="action-label">Start fresh</span>
+            </button>
+          </div>
+        </div>
+        <button class="action-button is-main is-tall start-open" id="btnOpenEmpty" type="button">
+          <svg class="icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          </svg>
+          <span class="action-label">Open photo</span>
+        </button>
+      </div>
+      <!-- The toast (#toast) and the question card (#pairPrompt: Upscale, Unpair, New photo)
+           are added here by js/app/core.js and js/app/pair.js, built from js/app/parts/. -->
+    </div>
+
+    <aside class="panel" id="panel">
+      <!-- One section per step. Each step's module builds its control area (the 200 px block
+           under the photo, with its grabber) and its options sheet into its section from
+           js/app/parts/. Each section belongs to its step: edit only your own step's section. -->
+      <!-- ==== step: Perspective (js/app/perspective.js) ==== -->
+      <section data-panel="perspective" class="active">
+        <!-- js/app/perspective.js builds the control area before this and the options sheet
+             after it. The Result preview shows on a wide screen only; #mini stays static
+             because core.js looks it up at load. -->
+        <div class="perspective-result">
+          <h3 class="sheet-heading">Result</h3>
+          <canvas class="mini" id="mini"></canvas>
+        </div>
+      </section>
+
+      <!-- ==== step: Rotate (js/app/rotate.js) ==== -->
+      <!-- Its control area and options sheet are built by buildRotateControls(). -->
+      <section data-panel="rotate"></section>
+
+      <!-- ==== step: Crop (js/app/crop.js) ==== -->
+      <!-- Its control area and options sheet are built by buildCropControls(). -->
+      <section data-panel="crop"></section>
+
+      <!-- ==== step: Levels (js/app/levels.js) ==== -->
+      <!-- Its control area and tips sheet are built by buildLevelsControls(). -->
+      <section data-panel="levels"></section>
+
+      <!-- ==== step: Overlay (js/app/overlay.js) ==== -->
+      <!-- Its control area and options sheet are built by buildOverlayControls(). -->
+      <section data-panel="overlay"></section>
+
+      <!-- ==== step: Export (js/app/export-controls.js) ==== -->
+      <!-- Its control area and options sheet are built by buildExportControls(). -->
+      <section data-panel="export">
+        <!-- Corner shots (js/app/corner-shots.js): its own sheet, built into this section by
+             buildCornerShotsControls. -->
+      </section>
+    </aside>
+  </main>
+  <!-- The step tabs (js/app/parts/tab-bar.js): along the bottom on the phone; shell.js moves
+       them into the top bar on a wide screen. -->
+  <div class="tab-bar-host" id="tabBarHost"></div>
+
+  <input type="file" id="fileInput" accept="image/*,.heic,.heif" hidden>
+  <input type="file" id="editsInput" accept="application/json,.json" hidden>
+  <input type="file" id="overlayInput" hidden
+    accept="image/png,image/webp,image/jpeg,image/svg+xml,.png,.webp,.jpg,.jpeg,.svg">
+  <div id="debugPanel" hidden></div>
+</div>
+
+<!-- Classic scripts, not ES modules, so the app also runs from file://. Order matters: config →
+     engine → app modules (core first: it creates the CF namespace; main last: it calls init()).
+     ?v= must equal CONFIG.appVersion (cache-busting; tests/selftest.js checks). Paths stay
+     relative. -->
+<script src="js/config.js?v=1.10.0-dev.16"></script>
+<script src="js/engine.js?v=1.10.0-dev.16"></script>
+<script src="js/app/core.js?v=1.10.0-dev.16"></script>
+<script src="js/app/adapters.js?v=1.10.0-dev.16"></script>
+<script src="js/app/state.js?v=1.10.0-dev.16"></script>
+<script src="js/app/view.js?v=1.10.0-dev.16"></script>
+<script src="js/app/levels.js?v=1.10.0-dev.16"></script>
+<script src="js/app/overlay.js?v=1.10.0-dev.16"></script>
+<script src="js/app/input.js?v=1.10.0-dev.16"></script>
+<!-- The fifteen parts of the 1.10 layout (and their icons): each builds and updates one kind
+     of control. -->
+<script src="js/app/parts/icon.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/top-bar.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/tab-bar.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/adjustment-line.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/status.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/ruler.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/slider.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/tool.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/action-button.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/chip.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/segmented-control.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/nudge-pad.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/sheet.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/alert-card.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/toast.js?v=1.10.0-dev.16"></script>
+<script src="js/app/parts/progress-line.js?v=1.10.0-dev.16"></script>
+<script src="js/app/shell.js?v=1.10.0-dev.16"></script>
+<script src="js/app/start-screen.js?v=1.10.0-dev.16"></script>
+<script src="js/app/debug-panel.js?v=1.10.0-dev.16"></script>
+<script src="js/app/perspective.js?v=1.10.0-dev.16"></script>
+<script src="js/app/rotate.js?v=1.10.0-dev.16"></script>
+<script src="js/app/crop.js?v=1.10.0-dev.16"></script>
+<script src="js/app/export.js?v=1.10.0-dev.16"></script>
+<script src="js/app/export-controls.js?v=1.10.0-dev.16"></script>
+<script src="js/app/corner-shots.js?v=1.10.0-dev.16"></script>
+<script src="js/app/pair.js?v=1.10.0-dev.16"></script>
+<script src="js/app/main.js?v=1.10.0-dev.16"></script>
+</body>
+</html>

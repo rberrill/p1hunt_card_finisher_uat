@@ -1,0 +1,260 @@
+/* =====================================================================
+   js/app/shell.js: the shell of the 1.10 layout. The top bar and the tab bar, switching steps,
+   each step's control area and options sheet (the grabber, closing sheets, the phone and wide
+   arrangements), binding and syncing the controls of every step (each step's own handlers live
+   in its module), and the step resets.
+   Shell modules share one namespace, CF (created in core.js). Names from core are
+   destructured below; anything from another module is called as CF.name.
+   tests/selftest.js checks these boundaries.
+   ===================================================================== */
+(function (CF) {
+  'use strict';
+  const { byId, makeEl, elements, app } = CF;
+
+  const STEPS = {
+    perspective: 'Perspective',
+    rotate: 'Rotate',
+    crop: 'Crop',
+    levels: 'Levels',
+    overlay: 'Overlay',
+    export: 'Export',
+  };
+  // True for a real step name. A stored step (session records are untrusted) is checked with
+  // this, not `STEPS[tab]`, which is truthy for inherited keys such as 'constructor'.
+  const isStep = tab => Object.prototype.hasOwnProperty.call(STEPS, tab);
+
+  /* ---------- steps ---------- */
+  // Opens a step. When the step really changes with a photo open, its control rows fade in
+  // (M7); the tab's weight changes at once, in syncUI.
+  function setTab(tab) {
+    const isNewStep = tab !== app.tab;
+    app.tab = tab;
+    elements.root.dataset.tab = tab;
+    document.querySelectorAll('section[data-panel]').forEach(section => {
+      section.classList.toggle('active', section.dataset.panel === tab);
+    });
+    elements.canvas.style.cursor = '';
+    if (tab === 'export' || tab === 'levels' || tab === 'overlay') app.views.export = null;
+    if (tab !== 'levels') {
+      app.dropper = null;
+      app.compare = false;
+    }
+    if (tab !== 'overlay') app.overlayMessage = '';
+    app.nudgeLoupeUntil = 0;
+    app.findMode = false;
+    closeSheets();
+    CF.Session.saveSoon();
+    syncUI();
+    if (isNewStep && app.img) CF.fadeInControlArea(byId(`${tab}Area`));
+    CF.requestRender();
+    CF.requestMini();
+  }
+
+  /* ---------- the bars ---------- */
+  // Builds the top bar and the tab bar into their hosts. The tab bar's place depends on the
+  // window's width (placeLayout).
+  function buildBars() {
+    elements.topBar = CF.buildTopBar();
+    elements.tabBar = CF.buildTabBar();
+    byId('topBarHost').replaceChildren(elements.topBar);
+    byId('tabBarHost').replaceChildren(elements.tabBar);
+  }
+
+  // The phone and wide arrangements. Phone: the tab bar along the bottom and every sheet
+  // closed. Wide: the tab bar inside the top bar and every step's options open, listed inline
+  // in the side panel (css/app.css).
+  function placeLayout() {
+    const isPhone = CF.phoneLayout.matches;
+    const host = isPhone ? byId('tabBarHost') : byId('topBarSteps');
+    if (elements.tabBar.parentElement !== host) host.append(elements.tabBar);
+    document.querySelectorAll('section[data-panel] .sheet-layer').forEach(layer => {
+      if (isPhone) {
+        layer.classList.remove('is-open');
+        layer.hidden = true;
+      } else {
+        layer.hidden = false;
+        layer.classList.add('is-open');
+      }
+    });
+    syncFitButton();
+  }
+
+  // Fit shows on a wide screen always, and on the phone only while the photo is zoomed or
+  // panned away from its fitted view. view.js calls this after every draw.
+  function syncFitButton() {
+    if (!elements.topBar) return;
+    const view = app.img ? CF.currentView() : null;
+    const isMoved = !!view && view.auto === false;
+    const isWide = !CF.phoneLayout.matches;
+    // A wide screen always shows Fit, dimmed until a photo is open (DT1).
+    CF.updateTopBar(elements.topBar, { isFitShown: isWide || (!!app.img && isMoved) });
+    byId('btnFit').disabled = !app.img;
+  }
+
+  /* ---------- each step's options sheet ---------- */
+  // The open step's options sheet; null on a wide screen, where options are always inline.
+  function currentSheet() {
+    if (!CF.phoneLayout.matches || !app.img) return null;
+    return byId(`${app.tab}Sheet`);
+  }
+
+  // Closes every open sheet on the phone. Returns true when one was open (Escape uses it).
+  function closeSheets() {
+    if (!CF.phoneLayout || !CF.phoneLayout.matches) return false;
+    let wasOpen = false;
+    document.querySelectorAll('.sheet-layer').forEach(layer => {
+      if (!CF.isSheetOpen(layer)) return;
+      wasOpen = true;
+      CF.closeSheet(layer);
+    });
+    return wasOpen;
+  }
+
+  // Builds the bars, then every step's control area and sheet: each step builds its own.
+  function buildControls() {
+    buildBars();
+    CF.buildPerspectiveControls();
+    CF.buildRotateControls();
+    CF.buildCropControls();
+    CF.buildLevelsControls();
+    CF.buildOverlayControls();
+    CF.buildExportControls();
+    CF.buildCornerShotsControls();
+  }
+
+  /* ---------- binding the controls ---------- */
+  // Binds every control once, at start-up. Each step binds its own.
+  function bindControls() {
+    bindNavigation();
+    CF.bindHandleNudge();
+    CF.bindPerspective();
+    CF.bindRotate();
+    CF.bindCrop();
+    CF.bindLevels();
+    CF.bindExport();
+    document.querySelectorAll('[data-reset]').forEach(button => {
+      button.addEventListener('click', () => resetStep(button.dataset.reset));
+    });
+    CF.bindOverlayControls();
+    CF.bindCornerShots();
+    CF.bindPair();
+  }
+
+  // Opens the file picker for `intent` (see receivePhoto in pair.js).
+  function pickPhoto(intent) {
+    app.fileIntent = intent;
+    elements.fileInput.click();
+  }
+
+  // The top bar, the tab bar and the grabbers.
+  function bindNavigation() {
+    elements.tabBar.addEventListener('click', event => {
+      const tab = event.target.closest('.step-tab');
+      if (tab && app.img) setTab(tab.dataset.step);
+    });
+    byId('btnOpen').onclick = () => pickPhoto('open');
+    byId('btnOpenEmpty').onclick = () => pickPhoto('open');
+    CF.bindStartScreen();
+    byId('btnUndo').onclick = CF.undo;
+    byId('btnRedo').onclick = CF.redo;
+    byId('btnFit').onclick = CF.fitCurrent;
+    document.querySelectorAll('.control-area > .grabber').forEach(grabber => {
+      // The grabber's target reaches 22 px up over the photo. A press there that lands on a
+      // handle or a ring belongs to the photo: hand it over before the sheet takes it.
+      grabber.addEventListener('pointerdown', event => {
+        if (!CF.hitsPhotoControl(event.clientX, event.clientY)) return;
+        event.stopImmediatePropagation();
+        CF.onPointerDown(event);
+      }, true);
+      CF.bindSheetHandle(grabber, currentSheet);
+    });
+    document.addEventListener('pointerdown', event => {
+      // The nudge loupe stays up between nudges; touching anything else hides it.
+      if (app.nudgeLoupeUntil && !event.target.closest('[data-nudge], .nudge-pad')) {
+        app.nudgeLoupeUntil = 0;
+        CF.requestRender();
+      }
+    }, true);
+  }
+
+  // A step's Reset button: that step's settings back to their defaults.
+  function resetStep(step) {
+    CF.commit(state => {
+      if (step === 'perspective') {
+        const best = app.detection.candidates[0];
+        state.corners = best
+          ? best.corners.map(point => point.slice())
+          : CF.insetCorners(state.source.width, state.source.height);
+        state.strength = CONFIG.perspective.strength / 100;
+        state.aspect = CF.cardAspect();
+        state.squareUpHeight = CONFIG.squareUpHeight;
+      } else if (step === 'rotate') {
+        state.rotation = { quarter: 0, fine: 0, fillFrame: false };
+        state.flip = { h: false, v: false };
+      } else if (step === 'crop') {
+        state.crop = CF.cropDefaults(null);
+      } else if (step === 'export') {
+        const defaults = CONFIG.export;
+        state.export = {
+          format: defaults.format,
+          quality: defaults.quality,
+          longEdge: defaults.longEdge,
+          interp: defaults.interp,
+          fill: defaults.fill,
+        };
+      }
+    });
+  }
+
+  /* ---------- syncing the controls to the state ---------- */
+  function syncUI() {
+    const hasPhoto = !!app.img;
+    const state = app.state;
+    elements.root.classList.toggle('has-img', hasPhoto);
+    CF.updateTopBar(elements.topBar, {
+      canUndo: CF.History.undo.length > 0,
+      canRedo: CF.History.redo.length > 0,
+    });
+    CF.updateTabBar(elements.tabBar, { current: app.tab, isDisabled: !hasPhoto });
+    syncFitButton();
+    document.querySelectorAll('.panel button, .panel select, .panel input').forEach(control => {
+      control.disabled = !hasPhoto;
+    });
+    if (!state) return;
+    CF.syncPerspective(state);
+    CF.syncRotate(state);
+    CF.syncCrop(state);
+    CF.syncExportControls(state);
+    CF.syncLevels();
+    CF.updateTabBar(elements.tabBar, { hasLevelsMark: app.levelsPending });
+    CF.syncOverlay();
+    syncReadouts();
+  }
+
+  // The readouts and what follows from them. An export's start and end resync only these.
+  function syncReadouts() {
+    CF.syncSourceInfo();
+    // Here rather than in syncUI: the side switch is off while an export runs.
+    CF.syncPair();
+    if (!app.state) return;
+    CF.syncNextCard(app.state);
+    CF.syncCornerShots();
+    CF.syncPerspectiveReadouts();
+    CF.syncCropReadout();
+    CF.syncExportReadouts();
+  }
+
+  Object.assign(CF, {
+    setTab,
+    STEPS,
+    isStep,
+    placeLayout,
+    syncFitButton,
+    closeSheets,
+    buildControls,
+    bindControls,
+    pickPhoto,
+    syncUI,
+    syncReadouts,
+  });
+})(window.CF);
