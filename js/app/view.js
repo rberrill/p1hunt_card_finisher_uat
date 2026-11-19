@@ -14,14 +14,18 @@
   const MAX_ZOOM = 64;
   // The dash of an invalid corner outline, in CSS px: 7 on, 5 off (frame P12).
   const INVALID_QUAD_DASH_PX = [7, 5];
+  // The space left around a fitted photo, in CSS px, and the wider space Crop leaves around the
+  // straightened frame.
+  const FIT_PADDING_PX = 24;
+  const CROP_FIT_PADDING_PX = 36;
 
   /* ---------- views (zoom and pan) ----------
      A view maps world (image) coordinates to the screen in CSS px:
      screen = world · zoom + (panX, panY). `auto` marks a view that still fits the photo, so a
-     resize can refit it. */
+     resize can refit it; `padding` is the space, in CSS px, it was fitted with. */
 
   // The view that fits a worldWidth × worldHeight area in the photo area with `padding` CSS px.
-  function fitView(worldWidth, worldHeight, padding = 24) {
+  function fitView(worldWidth, worldHeight, padding = FIT_PADDING_PX) {
     const width = app.cssWidth;
     const height = app.cssHeight;
     const fitX = (width - 2 * padding) / worldWidth;
@@ -32,6 +36,7 @@
       panX: (width - worldWidth * zoom) / 2,
       panY: (height - worldHeight * zoom) / 2,
       auto: true,
+      padding,
     };
   }
 
@@ -56,9 +61,15 @@
       }
       return app.views.export;
     }
-    if (!app.views.result) {
+    // Rotate, Crop and Perspective's Preview share one view, so a zoom or pan made on one is
+    // kept on the others (ruling R91). While it is still fitted, each step fits it its own way,
+    // whichever of them fitted it first (ruling R90).
+    const padding = app.tab === 'crop' ? CROP_FIT_PADDING_PX : FIT_PADDING_PX;
+    const shared = app.views.result;
+    const isKept = !!shared && (!shared.auto || shared.padding === padding);
+    if (!isKept) {
       const rotated = app.geometry.rotated;
-      app.views.result = fitView(rotated.width, rotated.height, app.tab === 'crop' ? 36 : 24);
+      app.views.result = fitView(rotated.width, rotated.height, padding);
     }
     return app.views.result;
   }
@@ -194,6 +205,8 @@
     return app.perspectivePreview;
   }
 
+  // Draws the photo area for the step that is open: the photo with its corner handles, the
+  // corrected result, a pair's joined image, or a line of words when the corners are invalid.
   function draw() {
     CF.syncFitButton();
     const canvas = elements.canvas;
@@ -212,18 +225,33 @@
       return;
     }
     if (!view) {
-      drawMessage(ctx, 'Fix the corners in Perspective first.');
+      drawMessage(ctx, fixCornersWords());
       return;
     }
     drawResult(ctx, view);
   }
 
+  // The words drawn in place of the open photo while its corners are invalid.
+  // Perspective's Preview is on the step that fixes the corners, so its words don't name the
+  // step (ruling R82). On Export with a pair open they name the side to fix, as the size line
+  // under the photo does (ruling R98; CF.pairFixWords is '' with no pair). The other words
+  // are also the line above Overlay's controls, written out in js/app/overlay.js
+  // (FIX_CORNERS_FIRST): a rewording changes both.
+  function fixCornersWords() {
+    if (app.tab === 'perspective') return 'Fix the corners first.';
+    const pairWords = app.tab === 'export' ? CF.pairFixWords() : '';
+    return pairWords || 'Fix the corners in Perspective first.';
+  }
+
   // Export of a pair with Together chosen: the joined image as it will be saved, over the
-  // checkerboard where the fill is transparent.
+  // checkerboard where the fill is transparent. While a side's corners are invalid it can't be
+  // drawn, and the words that name the side to fix take its place: the size line's own words
+  // (CF.pairFixWords), so the two always say the same (ruling R98). With Separately chosen,
+  // fixCornersWords draws them in place of the open side.
   function drawTogether(ctx) {
     const view = togetherView();
     if (!view) {
-      drawMessage(ctx, 'Fix the corners of both sides in Perspective first.');
+      drawMessage(ctx, CF.pairFixWords());
       return;
     }
     const canvas = CF.togetherPreview();

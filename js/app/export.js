@@ -69,6 +69,22 @@
   const PHOTO_RELEASED_MESSAGE = 'The photo isn’t loaded after the last export. '
     + 'Tap Front or Back to switch sides, then switch back.';
 
+  // An error whose fix the app knows (ruling R49): its message is advice a person can act on,
+  // and a failed save shows it as it is (failureText). Only the app makes one, by calling
+  // this, so nothing is ever decided from a browser error's own words.
+  function adviceError(message) {
+    const error = new Error(message);
+    error.isAdvice = true;
+    return error;
+  }
+
+  // The red message for a save that failed with `error`: the error's own advice when the app
+  // threw it as an adviceError, in place of `shortLine`; else `shortLine`, the fixed line for
+  // a failure the app can't explain (ruling R24), whose own words go to the console.
+  function failureText(error, shortLine) {
+    return error && error.isAdvice === true ? error.message : shortLine;
+  }
+
   function toBlob(canvas, type, quality) {
     return new Promise((resolve, reject) => canvas.toBlob(blob => {
       if (blob) resolve(blob);
@@ -183,7 +199,7 @@
     const isTransparent = state.export.fill === 'transparent';
     const isJpegOnTransparent = state.export.format === 'jpeg' && isTransparent;
     const photo = options.photo || app.img.el;
-    if (!photo) throw new Error(PHOTO_RELEASED_MESSAGE);
+    if (!photo) throw adviceError(PHOTO_RELEASED_MESSAGE);
     const region = makeCanvas(1, 1);
     const target = options.target || null;
     const render = {
@@ -354,15 +370,25 @@
     });
   }
 
+  // True when the upscale question's Yes would save a bigger file than its No: `upscaled`, the
+  // file's size after Yes, has a longer long edge than `real`, its size after No (both
+  // { width, height } in px). The question is asked only then (ruling R37). Only a file under
+  // the chosen Size can be bigger after Yes, and not even that one where a size limit holds
+  // the output back, or where a link's export.allowUpscale has enlarged it already.
+  function isUpscaleBigger(upscaled, real) {
+    return Math.max(upscaled.width, upscaled.height) > Math.max(real.width, real.height);
+  }
+
   // The upscale the question offers for the open photo's export: { targetPx, text } when the
-  // crop's long edge is under the chosen Size (the readout's "full crop, not upscaled"), else
-  // null. With a link's export.allowUpscale the output is already at Size, so no question.
+  // output's long edge is under the chosen Size (the readout's "full crop, not upscaled") and
+  // Yes would save a bigger file than No (isUpscaleBigger), else null.
   function offeredUpscale(state) {
     const targetPx = state.export.longEdge;
     const geometry = app.geometry;
     if (!targetPx || !geometry || !geometry.ok) return null;
     const { width, height } = geometry.output;
     if (Math.max(width, height) >= targetPx) return null;
+    if (!isUpscaleBigger(exportGeometry(state, true).output, geometry.output)) return null;
     return {
       targetPx,
       text: `The crop is ${width} × ${height} px at the photo’s resolution.`,
@@ -384,21 +410,33 @@
     if (file.type === type) return '';
     const asked = (EXTENSIONS[type] || type).toUpperCase();
     const savedAs = extensionFor(file).toUpperCase();
-    return ` ${asked} isn’t supported by this browser, so it was saved as ${savedAs}.`;
+    return `${asked} isn’t supported by this browser, so it was saved as ${savedAs}.`;
   }
 
-  // Shows how a save went: `done` ("Exported … in N s."), with fallbackNote's sentence when the
-  // browser saved another format than the requested `type`, as a longer warning. The note used
-  // to be its own toast, which `done` replaced at once. outcome: 'saved' (Download) or
-  // shareFiles' outcome; 'pending' adds how to finish, 'cancelled' and 'failed' show nothing
-  // (shareFiles already said why).
-  function toastSaved(done, files, type, outcome) {
-    if (!['saved', 'shared', 'pending'].includes(outcome)) return;
+  // What a finished save did, as the finished message says it, by toastSaved's outcome: "ready"
+  // while a refused share waits for Share now (ruling R79).
+  const SAVED_ACTIONS = { saved: 'downloaded', shared: 'shared', pending: 'ready' };
+
+  // Shows how a save went, in the approved form "THING ACTION: SIZE in N s." (ruling R79,
+  // tests/catalog/wording.md), for example "Photo downloaded: 1074 × 1074 px in 0.4 s.".
+  // saved: { thing, size, seconds }: what was saved ('Photo', 'Front and back', 'Corner sheet'
+  // or '4 corner photos'), its size as the message writes it ("1074 × 1074 px") and the
+  // seconds it took. outcome: 'saved' (Download) or shareFiles' outcome, which gives the ACTION
+  // (SAVED_ACTIONS); 'pending' also adds how to finish, 'cancelled' and 'failed' show nothing
+  // (shareFiles already said why). fallbackNote's sentence follows when the browser saved
+  // another format than the requested `type`, as a longer warning. The note used to be its own
+  // toast, which the finished message replaced at once. Each sentence is a line of its own
+  // (ruling R99): as one run of text, the three together were cut at three lines on a phone. The
+  // finished sentence alone stays a plain message, as it always was.
+  function toastSaved(saved, files, type, outcome) {
+    const action = SAVED_ACTIONS[outcome];
+    if (!action) return;
+    const done = `${saved.thing} ${action}: ${saved.size} in ${saved.seconds} s.`;
     const note = fallbackNote(files[0], type);
-    const finish = outcome === 'pending' ? ' Tap Share now to open the share sheet.' : '';
-    const text = done + note + finish;
-    if (note || finish) toast(text, note ? 'warn' : '', 6000);
-    else toast(text);
+    const finish = outcome === 'pending' ? 'Tap Share now to open the share sheet.' : '';
+    const added = [note, finish].filter(sentence => sentence !== '');
+    if (added.length) toast([done, ...added], note ? 'warn' : '', 6000);
+    else toast(done);
   }
 
   // Delivers a finished export by Download or Share, with a toast saying how it went.
@@ -407,18 +445,18 @@
     const seconds = ((performance.now() - startTime) / 1000).toFixed(1);
     const name = `${exportBaseName(state)}${CONFIG.export.suffix}.${extension}`;
     const output = exportGeometry(state, isUpscaled).output;
-    const done = `Exported ${output.width} × ${output.height} px in ${seconds} s.`;
+    const saved = { thing: 'Photo', size: `${output.width} × ${output.height} px`, seconds };
     const file = new File([blob], name, { type: blob.type });
     if (kind === 'download') {
       // Saved before the download, which can leave the page on iPhone.
       markExported(state);
       CF.Session.flush();
       Exporter.download(blob, name);
-      toastSaved(done, [file], type, 'saved');
+      toastSaved(saved, [file], type, 'saved');
       return;
     }
     const outcome = await shareExport([file], () => markExported(state));
-    toastSaved(done, [file], type, outcome);
+    toastSaved(saved, [file], type, outcome);
   }
 
   // Records that these edits were exported (downloaded, copied or shared), which shows Next
@@ -473,8 +511,9 @@
   // Exports the current edits. kind: 'download', 'share' or 'copy' (PNG to the clipboard). A
   // pair exports both sides as chosen, except that Copy with Separately copies the open side
   // (the Copy button is hidden then, so only a caller in code reaches that).
-  // When the crop is under the chosen Size, the upscale question comes first (offeredUpscale);
-  // Copy still reaches the clipboard inside the tap that answers it.
+  // When the file would be under the chosen Size and Yes would save a bigger one, the upscale
+  // question comes first (offeredUpscale); Copy still reaches the clipboard inside the tap that
+  // answers it.
   function doExport(kind) {
     if (!app.img || app.exporting || app.isSwitching) return;
     if (app.pair && (kind !== 'copy' || app.pairOutput !== 'separately')) {
@@ -491,7 +530,9 @@
   }
 
   // Renders, encodes and delivers one export of `state` (a copy of the edits). kind as for
-  // doExport; isUpscaled as for renderFull.
+  // doExport; isUpscaled as for renderFull. A failure shows a short fixed line, and its own
+  // words go to the console (ruling R24); one whose fix the app knows shows its advice instead
+  // (failureText).
   async function runExport(kind, state, isUpscaled) {
     const type = kind === 'copy' ? 'image/png' : MIME_TYPES[state.export.format];
     const startTime = performance.now();
@@ -501,20 +542,22 @@
         if (kind === 'copy') {
           await Exporter.copy(encoding);
           markExported(state);
-          toast('Copied to clipboard (PNG).');
+          toast('Photo copied (PNG).');
         } else {
           await deliverExport(kind, await encoding, state, type, startTime, isUpscaled);
         }
       });
     } catch (error) {
       console.error(error);
-      toast((kind === 'copy' ? 'Copy failed: ' : 'Export failed: ') + error.message, 'error', 6000);
+      const shortLine = kind === 'copy' ? 'Copy failed.' : 'Export failed.';
+      toast(failureText(error, shortLine), 'error', 6000);
     }
   }
 
   // Opens the share sheet for finished files. Returns 'shared', 'cancelled', 'pending' or
   // 'failed'. 'pending': the browser refused because the tap was too long ago (a slow export)
-  // and canWait is true, so the caller keeps the files for a fresh tap ("Share now").
+  // and canWait is true, so the caller keeps the files for a fresh tap ("Share now"). 'failed'
+  // has shown "Share failed." and written the error to the console (ruling R24).
   async function shareFiles(files, canWait) {
     try {
       await navigator.share({ files });
@@ -522,7 +565,8 @@
     } catch (error) {
       if (error.name === 'AbortError') return 'cancelled';
       if (error.name === 'NotAllowedError' && canWait) return 'pending';
-      toast('Share failed: ' + error.message, 'error', 6000);
+      console.error(error);
+      toast('Share failed.', 'error', 6000);
       return 'failed';
     }
   }
@@ -589,64 +633,99 @@
     }
   }
 
-  async function loadEdits(file) {
+  // The characters taken out of a photo's name before a message shows it: the control
+  // characters (U+0000 to U+001F, U+007F), the line and paragraph separators (U+2028, U+2029) and
+  // the marks that change the direction text runs in (U+202A to U+202E, U+2066 to U+2069). A
+  // name from an edits file is untrusted: left in, they could break the line it is shown on, or
+  // turn the words after it round.
+  const UNSAFE_NAME_CHARACTERS = /[\u0000-\u001f\u007f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+
+  // An edits file's photo name as a message shows it: each unsafe character replaced by a space,
+  // then cut to 60 characters (shortText). '' when the file holds no name.
+  function shownEditsName(name) {
+    if (typeof name !== 'string') return '';
+    return shortText(name.replace(UNSAFE_NAME_CHARACTERS, ' '));
+  }
+
+  // Reads an edits file (a File) for the open photo → the edits it holds, brought up to date, or
+  // null when it can't be used: too large, not JSON, not an edits file, no photo open, or saved
+  // for a photo of another size. A file that can't be used is refused with a message.
+  async function readEditsFile(file) {
     if (file.size > CONFIG.export.editsMaxBytes) {
       toast('That file is too large to be a Card Finisher edits file.', 'error');
-      return;
+      return null;
     }
     let edits;
     try {
       edits = JSON.parse(await file.text());
     } catch (error) {
       toast('That file isn’t valid JSON.', 'error');
-      return;
+      return null;
     }
     if (!looksLikeEdits(edits)) {
       toast('That isn’t a Card Finisher edits file.', 'error');
-      return;
+      return null;
     }
     if (!app.img) {
       toast('Open the matching photo first, then load its edits.', 'warn', 5000);
-      return;
+      return null;
     }
     upgradeEdits(edits);
     const { width, height } = edits.source;
     if (width !== app.img.width || height !== app.img.height) {
-      const photoSize = `${app.img.width}×${app.img.height}`;
-      const message = `These edits are for a ${width}×${height} photo; this one is ${photoSize}.`;
+      const photoSize = `${app.img.width} × ${app.img.height}`;
+      const message = `These edits are for a ${width} × ${height} photo; this one is ${photoSize}.`;
       toast(message, 'error', 6000);
-      return;
+      return null;
     }
+    return edits;
+  }
+
+  // Loads an edits file (a File) onto the open photo, as one undo step. A file that can't be
+  // used is refused and changes nothing (readEditsFile); on a phone it leaves Export's options
+  // open, with Load edits still at hand. A file that is used shows one message (rulings R12 and
+  // R48): "Edits loaded.", white, alone when nothing was wrong; with a problem, an amber warning
+  // with a line under it for each one (the file was saved for a photo of another name, settings
+  // that weren't valid were reset, its logo was left out). On a phone it also closes Export's
+  // options, so the message has the whole photo area (R12).
+  async function loadEdits(file) {
+    const edits = await readEditsFile(file);
+    if (!edits) return;
+    const problems = [];
     if (edits.source.name !== app.img.name) {
-      const savedFor = shortText(edits.source.name) || 'another photo';
-      toast(`Edits were saved for “${savedFor}”. Applied anyway — sizes match.`, 'warn', 5000);
+      const savedFor = shownEditsName(edits.source.name) || 'another photo';
+      problems.push(`Saved for “${savedFor}”; sizes match.`);
     }
     // Only well-formed fields are used; anything else in the file falls back to the default.
     const clean = CF.cleanState(edits, app.img);
     const next = clean.state;
-    if (clean.invalid.length) {
-      const fields = clean.invalid.join(', ');
-      toast(`Some settings in these edits weren’t valid and were reset: ${fields}.`, 'warn', 6000);
-    }
+    if (clean.invalid.length) problems.push(`Reset, not valid: ${clean.invalid.join(', ')}.`);
     next.overlayImage = edits.overlayImage;
     if (!(await CF.overlayFromEdits(next))) {
-      toast('The overlay in these edits couldn’t be read, so it was left out.', 'warn', 5000);
+      problems.push('Logo left out; it couldn’t be read.');
       next.overlay = null;
     }
     CF.commit(state => {
       for (const key of Object.keys(state)) delete state[key];
       Object.assign(state, next);
     });
+    CF.closeSheets();
+    // One message, so no line is replaced before it is read. It stays as long as its kind does:
+    // a warning's usual 5 s however many lines it has (R12).
+    toast(['Edits loaded.', ...problems], problems.length ? 'warn' : '');
   }
 
   Object.assign(CF, {
     Exporter,
     MIME_TYPES,
     PHOTO_RELEASED_MESSAGE,
+    adviceError,
+    failureText,
     renderFull,
     exportGeometry,
     sharpenUpscaled,
     askUpscale,
+    isUpscaleBigger,
     renderWarped,
     encodeCanvas,
     exportBaseName,

@@ -6,7 +6,7 @@
    ===================================================================== */
 const CONFIG = {
   // See CHANGELOG.md.
-  appVersion: '1.10.0-dev.17',
+  appVersion: '1.10.0-dev.18',
   debug: false,
   // Long side of the in-memory preview copy (and of the warped preview).
   previewMaxPx: 2048,
@@ -148,7 +148,8 @@ const CONFIG = {
   },
   // The "Upscale to N px?" question. Download, Share and Copy ask it when the saved file's
   // long edge would be under the chosen Size (a pair's joined image, or either of its two
-  // files); the corner buttons when theirs would be under cornerShots.upscaleTargetPx.
+  // files); the corner buttons when theirs would be under cornerShots.upscaleTargetPx. It is
+  // asked only when Yes would save a bigger file than No.
   // Yes renders bicubic at the asked size, then runs this unsharp mask: the blur's sigma
   // in source px (scaled by the upscale factor, so it sharpens card edges, not the
   // interpolation grid), the amount (1 = add the full difference), and the luma difference
@@ -275,7 +276,9 @@ const CONFIG = {
 
   // Session restore: the last photo and its edits are kept on this device (IndexedDB) so a
   // reload, a navigation or iOS closing the tab can be resumed. Nothing leaves the device.
-  session: { enabled: true, dbName: 'p1hunt-finisher', saveDelayMs: 400 },
+  // A change is saved saveDelayMs after it is made: short, because the save made as the page
+  // closes isn't sure to land, so a change must be stored before a person can close the tab.
+  session: { enabled: true, dbName: 'p1hunt-finisher', saveDelayMs: 100 },
 
   // The Overlay step (a logo). Placement defaults live in CardEngine.OVERLAY_DEFAULTS.
   overlay: {

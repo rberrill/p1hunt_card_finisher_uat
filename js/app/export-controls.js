@@ -13,17 +13,13 @@
 
   // The step's tips (the plan's approved wording, 14 November). Export has no keyboard help
   // (frame DT6).
-  // The first and the last are for the phone, so a wide screen leaves them out (Rich,
-  // 2026-11-15).
+  // The first is for the phone, so a wide screen leaves it out (Rich, 2026-11-15). A fourth,
+  // about edits files, nearly repeated the hint under Save edits and Load edits, and went
+  // (ruling R61).
   const EXPORT_TIPS = [
     { text: 'Share’s Save Image puts the photo in Photos.', isPhoneOnly: true },
     'Original keeps the crop at the photo’s own resolution and never upscales.',
     'Next card shows once these edits are exported.',
-    {
-      text: 'An edits file is small. Re-open the same photo, load it, and the export is '
-        + 'identical.',
-      isPhoneOnly: true,
-    },
   ];
   const EXPORT_FORMATS = [
     { value: 'jpeg', label: 'JPEG' },
@@ -46,9 +42,24 @@
     { value: 'together', label: 'Together' },
     { value: 'separately', label: 'Separately' },
   ];
+  // The controls that are off while an export runs, by id, besides the Size and Format choices
+  // and the Quality slider (syncExportLock): Interpolation, Fill outside photo and its custom
+  // color, Reset export settings, Load edits and Add back.
+  const EXPORT_LOCKED_IDS = [
+    'interp',
+    'fill',
+    'fillColor',
+    'exportResetRow',
+    'btnLoadEdits',
+    'btnAddBack',
+  ];
   // Icon sizes in CSS px: the note's warning mark and a picker row's chevron (frame E4, E11).
   const NOTE_ICON_PX = 15;
   const PICKER_ICON_PX = 16;
+  // The size limit reads in millions of pixels (MP) to one decimal: a tenth of an MP is
+  // 100,000 pixels, and there are ten to the MP.
+  const PIXELS_PER_TENTH_MP = 100000;
+  const TENTHS_PER_MP = 10;
 
   // True once Custom… is picked in the fill picker, until a fixed choice is. It keeps the
   // Custom color row up while the custom color still equals a fixed one (white, at first).
@@ -386,20 +397,57 @@
     CF.updateSegmented(byId('pairOutput'), app.pairOutput);
   }
 
+  // The area limit in force (CONFIG.maxOutputArea, which a link can lower; ruling R47) in
+  // millions of pixels, rounded down to a tenth (ruling R15): 16.7 for 16,777,216 pixels, 1 for
+  // 1,000,000.
+  function limitMegapixels() {
+    return Math.floor(CONFIG.maxOutputArea / PIXELS_PER_TENTH_MP) / TENTHS_PER_MP;
+  }
+
+  // The limit that scaled an output down, as the note's last words: the long-side limit in px
+  // or the area limit in MP, each the one in force, since a link can lower either (rulings R47
+  // and R102). Both are rounded down: a link can give a long side that is not a whole number
+  // of px. clampedBy: the engine's name for the limit, 'longSide' or 'area'.
+  function limitWords(clampedBy) {
+    if (clampedBy === 'longSide') return `${Math.floor(CONFIG.maxOutputPx)} px limit.`;
+    return `${limitMegapixels()} MP limit.`;
+  }
+
+  // The note for an output scaled down to fit a size limit, or '' when nothing is (rulings
+  // R14, R15 and R102; the words are the approved ones, tests/catalog/wording.md). It names the
+  // limit that set the size. geometry: the open side's. pair: CF.pairReadout()'s result while
+  // a pair is open, else null. A pair saved Together is one image, with its own cap. Saved
+  // Separately it is two files: the note names the side when the one scaled down is not on
+  // screen, and says so when both are; two sides scaled down by different limits share one
+  // sentence that names neither limit.
+  function clampNote(geometry, pair) {
+    const plainNote = clampedBy => `Scaled down to fit the ${limitWords(clampedBy)}`;
+    if (!pair) return geometry.output.isClamped ? plainNote(geometry.output.clampedBy) : '';
+    if (pair.layout) return pair.layout.scale < 1 ? plainNote(pair.layout.clampedBy) : '';
+    const sides = pair.scaledDownSides;
+    if (!sides.length) return '';
+    const sideLimits = pair.clampedBy;
+    if (sides.length > 1) {
+      if (sideLimits.front !== sideLimits.back) {
+        return 'Both sides are scaled down to fit the size limits.';
+      }
+      return `Both sides are scaled down to fit the ${limitWords(sideLimits.front)}`;
+    }
+    const side = sides[0];
+    if (side === app.pair.current) return plainNote(sideLimits[side]);
+    return `The ${side} is scaled down to fit the ${limitWords(sideLimits[side])}`;
+  }
+
   // The export notes: why the output isn't what you might expect, one string each. The phone
   // has room for one at a time, so they come in the order to deal with them: the next shows
-  // once the first is gone. pairLayout: the Together layout when a pair is saved Together (its
-  // cap replaces the open side's).
-  function exportNotes(state, geometry, pairLayout) {
+  // once the first is gone. pair: CF.pairReadout()'s result while a pair is open, else null.
+  function exportNotes(state, geometry, pair) {
     const notes = [];
     if (app.levelsPending) {
       notes.push('Levels has unapplied changes; export uses the applied levels.');
     }
-    const isClamped = pairLayout ? pairLayout.scale < 1 : geometry.output.isClamped;
-    if (isClamped) {
-      const megapixels = Math.round(CONFIG.maxOutputArea / 1e6 * 10) / 10;
-      notes.push(`Clamped to fit the ${megapixels} MP canvas limit.`);
-    }
+    const scaledDown = clampNote(geometry, pair);
+    if (scaledDown) notes.push(scaledDown);
     if (state.export.format === 'jpeg' && state.export.fill === 'transparent') {
       notes.push('JPEG has no transparency; empty areas will be white.');
     }
@@ -462,31 +510,52 @@
     });
   }
 
+  // While an export runs, what would change the edits under it is off with the save buttons
+  // (ruling R17): the Size and Format choices, the options sheet's settings and its Reset, Load
+  // edits and Add back. The step tabs stay live.
+  function syncExportLock() {
+    const isExporting = !!app.exporting;
+    const choices = '#exportSize .segment, #exportFormat .segment';
+    document.querySelectorAll(choices).forEach(segment => {
+      segment.disabled = isExporting;
+    });
+    CF.updateSlider(byId('quality').parentElement, { isDisabled: isExporting });
+    EXPORT_LOCKED_IDS.forEach(id => {
+      byId(id).disabled = isExporting;
+    });
+  }
+
   // The readout, the notes under it, the save row and Add back. A note hides no button: it is
   // the readout row's second line, and stays beside Next card after an export. (On the phone,
   // css/app.css shows one note at a time, and beside a pair's Together | Separately gives the
   // note the readout's place until it is dealt with.)
+  // A pair with a side whose corners are invalid can't be saved: the readout names the side to
+  // fix, whichever side is open, in place of a size it doesn't have, and the save row is off
+  // (rulings R26 and R98). A single photo with invalid corners keeps an empty readout.
   function syncExportReadouts() {
     const state = app.state;
     const geometry = app.geometry;
-    const isValid = !!geometry && geometry.ok;
+    const isOpenValid = !!geometry && geometry.ok;
+    const fixWords = CF.pairFixWords();
+    const isValid = isOpenValid && !fixWords;
     syncSaveButtons(isValid);
+    syncExportLock();
     byId('btnAddBack').hidden = !!app.pair;
     const noteList = byId('exportMessage');
     if (!isValid) {
-      byId('exportReadout').textContent = '';
+      byId('exportReadout').textContent = fixWords;
       noteList.replaceChildren();
       noteList.hidden = true;
       return;
     }
-    const pairLayout = syncExportReadout(state, geometry);
-    const notes = exportNotes(state, geometry, pairLayout);
+    const pair = syncExportReadout(state, geometry);
+    const notes = exportNotes(state, geometry, pair);
     noteList.replaceChildren(...notes.map(buildNote));
     noteList.hidden = !notes.length;
   }
 
   // The output readout: the size and format, or for a pair the choice and its size. Returns the
-  // Together layout when a pair is saved Together, else null.
+  // pair's readout (CF.pairReadout) while a pair is open, else null.
   function syncExportReadout(state, geometry) {
     const { crop, output } = geometry;
     const format = state.export.format.toUpperCase();
@@ -495,10 +564,13 @@
       const size = makeEl('b', null, pair.size);
       // The control beside it says Together or Separately, so the readout doesn't (frame F9).
       byId('exportReadout').replaceChildren(size, ` px · ${format}`);
-      return pair.layout;
+      return pair;
     }
     const longEdge = state.export.longEdge;
-    const isSmall = longEdge && output.scale >= 1 && Math.max(crop.width, crop.height) < longEdge;
+    // A crop under the chosen Size is saved as it is, and the tail says so. A link's
+    // export.allowUpscale enlarges it to the Size instead (the output's scale is then over 1),
+    // so there the tail goes (ruling R30).
+    const isSmall = longEdge && output.scale === 1 && Math.max(crop.width, crop.height) < longEdge;
     // The tail gives way on the phone while a note shows: the row holds one readout line then.
     const tail = makeEl('span', { class: 'export-readout-tail' }, ' · full crop, not upscaled');
     const outputSize = makeEl('b', null, `${output.width} × ${output.height}`);

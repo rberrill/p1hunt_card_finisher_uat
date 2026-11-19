@@ -244,8 +244,10 @@
     const step = app.tab;
     const leaving = captureSide();
     app.img.close();
-    // Work still running for the side being left (detection, a session save) is now stale.
+    // Work still running for the side being left (detection, a session save, a photo that is
+    // still opening) is now stale.
     app.loadId++;
+    app.openRequestId++;
     applySide(other, img);
     pair.other = leaving;
     pair.current = otherSide(pair.current);
@@ -257,24 +259,27 @@
     console.info(`[card-finisher] switched to the ${pair.current} in `
       + `${app.switchDurationMs.toFixed(0)} ms`);
     savePairSession(true);
-    // A side restored from a session has no candidates yet (for Candidate and snapping).
-    if (!app.detection.last) CF.runDetect({ auto: true, keepCorners: true });
+    CF.detectReopenedSide();
   }
 
   // Ends the pair, keeping `side` as a single photo. Its crop stays 5:7 and the preset unlocks;
   // the remembered preset stays as it was until a preset is picked (app.isPairCrop).
+  // The screen changes at once; the message waits until storage matches it.
   async function unpair(side) {
     hidePrompt();
     if (!app.pair) return;
     if (side !== app.pair.current) await switchSide();
     if (!app.pair || app.pair.current !== side) return;
     app.pair = null;
-    clearPairSession();
+    const pairCleared = clearPairSession();
     // The stored photo is the side that was open when the pair was last saved, which is the
     // other one when Keep switched sides: store the kept side's photo, or Resume would bring
     // back the wrong picture under these edits.
-    CF.Session.savePhoto(app.file, app.loadId);
+    const photoStored = CF.Session.savePhoto(app.file, app.loadId);
     CF.stateChanged();
+    // The message says the unpairing is done, so it waits for the pair's records to go and the
+    // kept side to be stored: a reload the moment it shows resumes the kept side on its own.
+    await Promise.all([pairCleared, photoStored]);
     toast(`Unpaired. The ${side} is a single photo now.`);
   }
 
@@ -298,10 +303,15 @@
   // Every photo that comes in (Open, Next card, Add back, drop, paste) goes through here.
   // intent: 'open', 'next' (Next card →, which ends a pair after its export without asking) or
   // 'addBack'. While paired, Open, drop and paste ask whether to end the pair or replace the
-  // side you're on.
+  // side you're on. While the app is busy the photo is refused, in words that say what it is
+  // busy with: an export, or a side of the pair opening (ruling R13).
   function receivePhoto(file, name, intent) {
-    if (app.exporting || app.isSwitching) {
+    if (app.exporting) {
       toast('Wait for the export to finish, then open the photo.', 'warn');
+      return;
+    }
+    if (app.isSwitching) {
+      toast('Wait for the other side to open, then open the photo.', 'warn');
       return;
     }
     hidePrompt();
@@ -407,9 +417,9 @@
   }
 
   // Identifies what a pair export saved: both sides' edits and the output choice. Next card shows
-  // while it matches.
-  function pairKey() {
-    const sides = sideStates();
+  // while it matches. sides: the edits to identify, in sideStates' shape; left out, the live
+  // ones. An export passes the copies it renders, so it is marked with what it saved.
+  function pairKey(sides = sideStates()) {
     return JSON.stringify([sides.front.state, sides.back.state, app.pairOutput]);
   }
 
@@ -437,19 +447,54 @@
     });
   }
 
-  // The export's readout for a pair: the choice and its size, e.g. "Together · 2881 × 2000 px".
+  // The words that name the side of the pair whose corners must be fixed before it can be
+  // saved: the back or the front, whichever side is open, or both sides when both sides'
+  // corners are invalid (rulings R26 and R98; the approved words, tests/catalog/wording.md).
+  // A side with invalid corners has no export size. '' with no pair, and when neither side
+  // needs fixing. Export's size line shows them, and so does the photo area in place of the
+  // Together image, or of the open side's picture with Separately.
+  function pairFixWords() {
+    const pair = app.pair;
+    if (!pair) return '';
+    // Each side's own edits are asked, not app.geometry: in the middle of a side switch that
+    // is still the geometry of the side being left.
+    const isValid = state => CardEngine.computeGeometry(state, geometryConfig()).ok;
+    const isWaitingSideValid = isValid(pair.other.state);
+    // While Add back's photo is still opening, the edits on screen are the waiting side's own
+    // (the front's): one side, judged once, so it is never taken for both.
+    const isOpenSideValid = pair.other.state === app.state || isValid(app.state);
+    if (!isOpenSideValid && !isWaitingSideValid) {
+      return 'Fix the corners of both sides in Perspective first.';
+    }
+    if (isOpenSideValid && isWaitingSideValid) return '';
+    const side = isOpenSideValid ? otherSide(pair.current) : pair.current;
+    return `Fix the ${side}’s corners in Perspective first.`;
+  }
+
+  // The export's readout for a pair: the choice and its size, e.g. "2881 × 2000 px".
+  // Together gives its layout. Separately gives layout: null and scaledDownSides, the sides
+  // ('front', 'back') whose own file is scaled down to fit the size limit: Export's note covers
+  // both files, not only the side on screen (ruling R14). clampedBy gives, by side, the limit
+  // that scaled it down, in the engine's words ('longSide' or 'area'; ruling R102).
+  // Only for a pair whose sides both have valid corners (pairFixWords says when not).
   function pairReadout() {
     const sides = sideStates();
     if (isTogether()) {
       const layout = togetherLayout(sides);
       return { label: 'Together', size: `${layout.width} × ${layout.height}`, layout };
     }
-    const sizeOf = state => {
-      const output = CardEngine.computeGeometry(state, geometryConfig()).output;
-      return `${output.width} × ${output.height}`;
+    const outputs = {};
+    for (const side of SIDES) {
+      outputs[side] = CardEngine.computeGeometry(sides[side].state, geometryConfig()).output;
+    }
+    const sizeOf = side => `${outputs[side].width} × ${outputs[side].height}`;
+    return {
+      label: 'Separately',
+      size: `${sizeOf('front')} + ${sizeOf('back')}`,
+      layout: null,
+      scaledDownSides: SIDES.filter(side => outputs[side].isClamped),
+      clampedBy: { front: outputs.front.clampedBy, back: outputs.back.clampedBy },
     };
-    const size = `${sizeOf(sides.front.state)} + ${sizeOf(sides.back.state)}`;
-    return { label: 'Separately', size, layout: null };
   }
 
   // Runs task(side, photoEl) for each side from its full-resolution photo, one photo in memory at
@@ -481,6 +526,8 @@
     if (app.img.el) return true;
     try {
       app.img = await CF.ImageSource.load(app.file, app.img.name);
+      // A search still running was started on the photo object just replaced.
+      CF.detectReloadedPhoto();
       return true;
     } catch (error) {
       console.warn('[card-finisher] photo not reloaded after the pair export:', error);
@@ -577,8 +624,8 @@
   }
 
   // Exports the pair as chosen. kind: 'download', 'share' or 'copy' (the Together image as PNG;
-  // with Separately chosen, Copy copies the open side through the normal export). When the
-  // file would be under the chosen Size, the upscale question comes first (pairUpscaleOffer).
+  // with Separately chosen, Copy copies the open side through the normal export). When Yes
+  // would save a bigger file, the upscale question comes first (pairUpscaleOffer).
   function exportPair(kind) {
     if (!app.pair || app.exporting) return;
     const sides = sideStates();
@@ -588,7 +635,8 @@
     try {
       offer = pairUpscaleOffer(sides, kind);
     } catch (error) {
-      toast('Export failed: ' + error.message, 'error', 6000);
+      console.error(error);
+      toast('Export failed.', 'error', 6000);
       return;
     }
     if (!offer) {
@@ -598,31 +646,71 @@
     CF.askUpscale(offer.targetPx, offer.text, isUpscaled => runPairExport(kind, sides, isUpscaled));
   }
 
-  // The upscale the question offers for the pair's export: { targetPx, text } when the saved
-  // file's long edge is under the chosen Size (Together, and Copy: the joined image;
-  // Separately: either side's file), else null.
+  // The upscale the question offers for the pair's export: { targetPx, text } when Yes would
+  // save a bigger file than No (CF.isUpscaleBigger, ruling R37: a file under the chosen Size
+  // that a size limit leaves room to enlarge), else null. Together, and Copy: the joined
+  // image. Separately: either side's file (separatelyUpscaleText).
   function pairUpscaleOffer(sides, kind) {
     const targetPx = sides.front.state.export.longEdge;
     if (!targetPx) return null;
-    const size = ({ width, height }) => `${width} × ${height}`;
-    const isUnder = ({ width, height }) => Math.max(width, height) < targetPx;
     if (isTogether() || kind === 'copy') {
       const layout = togetherLayout(sides);
-      if (!isUnder(layout)) return null;
-      return { targetPx, text: `The image is ${size(layout)} px at the photos’ resolution.` };
+      // An image already at the Size is never offered, whatever the fit's rounding gives.
+      if (Math.max(layout.width, layout.height) >= targetPx) return null;
+      if (!CF.isUpscaleBigger(togetherLayout(sides, targetPx), layout)) return null;
+      const size = `${layout.width} × ${layout.height}`;
+      return { targetPx, text: `The image is ${size} px at the photos’ resolution.` };
     }
-    const front = CF.exportGeometry(sides.front.state, false).output;
-    const back = CF.exportGeometry(sides.back.state, false).output;
-    if (!isUnder(front) && !isUnder(back)) return null;
-    const text = `The front is ${size(front)} px and the back ${size(back)} px`
-      + ` at the photos’ resolution.`;
-    return { targetPx, text };
+    const text = separatelyUpscaleText(sides);
+    return text ? { targetPx, text } : null;
+  }
+
+  // The upscale question's text for a pair saved Separately, or '' when Yes would make neither
+  // side's file bigger. It names only the side Yes would upscale, and both only when Yes would
+  // upscale both (ruling R50; the words are the approved ones, tests/catalog/wording.md): a
+  // side already at the chosen Size is scaled down to it, so its size is not one to quote.
+  function separatelyUpscaleText(sides) {
+    const real = {};
+    const upscaled = {};
+    for (const side of SIDES) {
+      real[side] = CF.exportGeometry(sides[side].state, false).output;
+      upscaled[side] = CF.exportGeometry(sides[side].state, true).output;
+    }
+    const size = side => `${real[side].width} × ${real[side].height}`;
+    const named = SIDES.filter(side => CF.isUpscaleBigger(upscaled[side], real[side]));
+    if (!named.length) return '';
+    if (named.length > 1) {
+      return `The front is ${size('front')} px and the back ${size('back')} px`
+        + ` at the photos’ resolution.`;
+    }
+    const side = named[0];
+    return `The ${side} is ${size(side)} px at the photo’s resolution.`;
+  }
+
+  // The size of what the pair's export saves, as the finished message writes it (ruling R79):
+  // the joined image's ("1583 × 1100 px") or, for two files, both sizes, front first
+  // ("748 × 1047 px and 771 × 1080 px"). isJoined: the Together image, not two files;
+  // isUpscaled as for runPairExport.
+  function pairSavedSize(sides, isJoined, isUpscaled) {
+    if (isJoined) {
+      const layout = togetherLayout(sides, isUpscaled ? sides.front.state.export.longEdge : 0);
+      return `${layout.width} × ${layout.height} px`;
+    }
+    const sizeOf = side => {
+      const output = CF.exportGeometry(sides[side].state, isUpscaled).output;
+      return `${output.width} × ${output.height} px`;
+    };
+    return `${sizeOf('front')} and ${sizeOf('back')}`;
   }
 
   // Renders, encodes and delivers the pair's export of `sides` (copies of both sides' edits).
-  // kind as for exportPair; isUpscaled: the saved file enlarged to the chosen Size.
+  // kind as for exportPair; isUpscaled: the saved file enlarged to the chosen Size. A failure
+  // shows a short fixed line, and its own words go to the console (ruling R24); one whose fix
+  // the app knows shows its advice instead (CF.failureText).
   async function runPairExport(kind, sides, isUpscaled) {
-    const key = pairKey();
+    // The copies' key, not the live edits': a search may have moved the corners since the tap,
+    // while the upscale question was up, and the file holds the corners as they were.
+    const key = pairKey(sides);
     const type = kind === 'copy' ? 'image/png' : CF.MIME_TYPES[app.state.export.format];
     const startTime = performance.now();
     try {
@@ -630,17 +718,19 @@
         if (kind === 'copy') {
           await CF.Exporter.copy(encodeTogether(sides, type, onProgress, isUpscaled));
           markPairExported(key);
-          toast('Copied to clipboard (PNG).');
+          toast('Front and back copied (PNG).');
           return;
         }
-        const encode = isTogether() ? togetherFile : encodeSeparately;
+        const isJoined = isTogether();
+        const encode = isJoined ? togetherFile : encodeSeparately;
         const files = await encode(sides, type, onProgress, isUpscaled);
-        await deliverPair(kind, files, key, startTime, type);
+        const size = pairSavedSize(sides, isJoined, isUpscaled);
+        await deliverPair(kind, files, key, startTime, type, size);
       });
     } catch (error) {
       console.error(error);
-      const what = kind === 'copy' ? 'Copy failed: ' : 'Export failed: ';
-      toast(what + error.message, 'error', 6000);
+      const shortLine = kind === 'copy' ? 'Copy failed.' : 'Export failed.';
+      toast(CF.failureText(error, shortLine), 'error', 6000);
     }
     // The export's canvas is freed by now, so a reload that failed under memory pressure gets
     // one more try; if the photo is still missing, say how to get it back.
@@ -651,11 +741,11 @@
   }
 
   // Delivers the pair's files by Download (one after another) or one share sheet. type: the
-  // requested MIME type, for CF.toastSaved's note when the browser saved another.
-  async function deliverPair(kind, files, key, startTime, type) {
+  // requested MIME type, for CF.toastSaved's note when the browser saved another. size: what
+  // was saved, as the finished message writes it (pairSavedSize).
+  async function deliverPair(kind, files, key, startTime, type, size) {
     const seconds = ((performance.now() - startTime) / 1000).toFixed(1);
-    const what = files.length === 1 ? 'the Together image' : 'the front and back';
-    const done = `Exported ${what} in ${seconds} s.`;
+    const saved = { thing: 'Front and back', size, seconds };
     if (kind === 'download') {
       // Saved first, since a download can leave the page on iPhone.
       markPairExported(key);
@@ -664,11 +754,11 @@
         if (i) await new Promise(resolve => setTimeout(resolve, PAIR_DOWNLOAD_GAP_MS));
         CF.Exporter.download(files[i], files[i].name);
       }
-      CF.toastSaved(done, files, type, 'saved');
+      CF.toastSaved(saved, files, type, 'saved');
       return;
     }
     const outcome = await CF.shareExport(files, () => markPairExported(key));
-    CF.toastSaved(done, files, type, outcome);
+    CF.toastSaved(saved, files, type, outcome);
   }
 
   /* ---------- the Together preview (Export) ---------- */
@@ -814,10 +904,14 @@
     }
   }
 
+  // Deletes the pair's stored records. Returns a Promise that settles once both deletes have
+  // finished; a delete that fails is ignored (the session is best-effort).
   function clearPairSession() {
     clearTimeout(pairSaveTimer);
-    CF.Session.del('pair').catch(() => {});
-    CF.Session.del('pairPhoto').catch(() => {});
+    return Promise.all([
+      CF.Session.del('pair').catch(() => {}),
+      CF.Session.del('pairPhoto').catch(() => {}),
+    ]);
   }
 
   // A stored pair record has the expected shape (it comes from storage, so it's untrusted; the
@@ -844,8 +938,8 @@
 
   // Resume, before the open side opens: rebuilds the waiting side from storage (photo, edits,
   // logo), making its preview copies with its full-resolution photo, which is closed before the
-  // open side is decoded. Returns true if the pair is back; a malformed record drops it, with
-  // the usual "reset" notice, and the open side resumes on its own.
+  // open side is decoded. Returns true if the pair is back; a malformed record drops it and
+  // returns false: the open side then opens on its own, and finishResume says so.
   async function restorePair(record) {
     try {
       const photo = await CF.Session.get('pairPhoto');
@@ -868,8 +962,6 @@
     } catch (error) {
       console.warn('[card-finisher] pair not restored:', error);
       clearPairSession();
-      // Said once the open side is up, so the opening toasts don't hide it.
-      app.wasPairReset = true;
       return false;
     }
   }
@@ -907,11 +999,13 @@
     }
   }
 
-  // Resume, after the open side opened: Next card shows again if the pair's export was saved,
-  // and a pair that couldn't be restored says so.
-  function finishResume() {
-    if (app.wasPairReset) {
-      app.wasPairReset = false;
+  // Resume, after the open side opened: Next card shows again if the pair's export was saved.
+  // wasPairDropped: the stored pair couldn't be restored, and the open side opened on its own.
+  // That is said once the side is up, so the opening toasts don't hide it, and only when the
+  // photo came back with its edits, since the line says it resumed. Otherwise the message for
+  // what happened to the photo stands alone (ruling R100).
+  function finishResume(wasPairDropped) {
+    if (wasPairDropped && app.hasResumedEdits) {
       const message = 'The saved pair wasn’t valid, so it was reset. '
         + 'This photo resumed on its own.';
       toast(message, 'warn', 6000);
@@ -965,6 +1059,7 @@
     showPrompt,
     hidePrompt,
     isPairExported,
+    pairFixWords,
     pairReadout,
     exportPair,
     togetherPreview,

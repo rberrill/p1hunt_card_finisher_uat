@@ -85,8 +85,12 @@
     detection: {
       candidates: [],
       index: 0,
+      isOnCandidate: false,
+      wasMovedByHand: false,
+      cornersAfterRun: '',
       last: null,
       running: 0,
+      pending: null,
       message: '',
       snapPoints: [],
       snapLines: [],
@@ -108,7 +112,12 @@
     cssWidth: 0,
     cssHeight: 0,
     edgeCanvas: null,
+    // Counts the photos that have opened, a side switch included; the session saves only for
+    // the one that is open.
     loadId: 0,
+    // Counts the opens that have started, so a slow one can tell a newer one took its place.
+    // An open that fails leaves loadId alone: the open photo keeps being saved (ruling R31).
+    openRequestId: 0,
     pendingSave: null,
     // Corner shots: the output ('sheet' or 'photos', a preference) and the files waiting for
     // "Share now" (corner-shots.js).
@@ -118,6 +127,8 @@
     exportedState: null,
     // The open photo's original file (a pair decodes a side again from it).
     file: null,
+    // True when openFile brought the photo back with its saved edits (Resume reads it at once).
+    hasResumedEdits: false,
     // A front + back pair (pair.js): { current, orient, other, exportedKey }, or null.
     pair: null,
     // The pair's output ('together' or 'separately', a preference).
@@ -185,12 +196,19 @@
   }
 
   // Shows a short message over the photo's bottom edge; a new one replaces the one that's up.
-  // kind: '' (info) | 'warn' | 'error' sets its color and icon. It stays durationMs, or as
-  // long as its kind does (TOAST_DURATIONS_MS).
-  function toast(text, kind = '', durationMs = TOAST_DURATIONS_MS[kind]) {
+  // message: its text, or an array of texts for a message of several lines, each shown on a
+  // line of its own (the Toast part's `lines`). kind: '' (info) | 'warn' | 'error' sets its
+  // color and icon. It stays durationMs, or as long as its kind does (TOAST_DURATIONS_MS).
+  function toast(message, kind = '', durationMs = TOAST_DURATIONS_MS[kind]) {
     const toastEl = mountToast();
     if (toastEl.classList.contains('is-shown')) fadeOutCopy(toastEl);
-    CF.updateToast(toastEl, { text, kind, isShown: false });
+    const isLines = Array.isArray(message);
+    CF.updateToast(toastEl, {
+      text: isLines ? undefined : message,
+      lines: isLines ? message : undefined,
+      kind,
+      isShown: false,
+    });
     placeToast();
     // Reading its size makes the browser take in the hidden state first, so each message
     // rises in afresh, from its place, even when it replaces one.

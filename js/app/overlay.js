@@ -4,7 +4,8 @@
    logo's thumbnail with Use saved overlay and Add logo in the control row, and Delete saved in
    the tool row; with a logo placed, Opacity in the label row, the move and size pads in the
    control row, and the tool row (Replace logo, Reset, Remove, Delete saved). A file error takes
-   the label row as a status. Its options sheet holds the Tips.
+   the label row as a status, and so does the line for invalid corners. Its options sheet holds
+   the Tips.
    Shell modules share one namespace, CF (created in core.js). Names from core are
    destructured below; anything from another module is called as CF.name.
    tests/selftest.js checks these boundaries.
@@ -32,6 +33,9 @@
   const images = new Map();
   // The browser's saved overlay: { id, type, name, settings, url } (url: a thumbnail).
   let saved = null;
+  // The id of the logo this page last asked storage to write to 'photoOverlay' (the write is
+  // best-effort, so it may not have landed), or found there at Resume; '' while not known.
+  let photoOverlayId = '';
 
   const TYPES_BY_EXTENSION = {
     png: 'image/png',
@@ -47,7 +51,18 @@
     nosize: 'That SVG has no width, height or viewBox, so it can’t be sized. '
       + 'Re-export it with a size.',
   };
+  const BYTES_PER_KB = 1024;
   const BYTES_PER_MB = 1048576;
+
+  // The logo size limit in force (CONFIG.overlay.maxBytes, which a link can lower), as the hint
+  // and the refusal of a file over it both give it (ruling R83): under 1 MB in whole KB
+  // ("64 KB"), from 1 MB in MB with at most one decimal ("5 MB", "1.5 MB").
+  function logoLimitText() {
+    const maxBytes = CONFIG.overlay.maxBytes;
+    if (maxBytes < BYTES_PER_MB) return `${Math.round(maxBytes / BYTES_PER_KB)} KB`;
+    // Read back as a number, so a whole number of MB prints with no decimal.
+    return `${Number((maxBytes / BYTES_PER_MB).toFixed(1))} MB`;
+  }
 
   // The file's image type, from its MIME type or else its extension; null if unsupported.
   function imageTypeOf(file) {
@@ -56,6 +71,11 @@
     const match = /\.(png|webp|jpe?g|svg)$/i.exec(file.name || '');
     return match ? TYPES_BY_EXTENSION[match[1].toLowerCase()] : null;
   }
+
+  // Whether a file is one Add logo takes: a supported image type, or else a supported
+  // extension. A drop on this step asks, so a logo whose type isn't a picture type is taken
+  // by its name (ruling R19); addOverlayFile still makes every check on it.
+  const isLogoFile = file => !!imageTypeOf(file);
 
   // FNV-1a over the bytes, plus the length: the same file always gets the same id.
   function hashBytes(buffer) {
@@ -220,12 +240,18 @@
     CF.syncUI();
   }
 
-  // Places an image as the overlay (one undo step), at saved settings if given.
+  // Places an image as the overlay. `settings` ({ cx, cy, w, opacity }) is the saved logo's
+  // last placement or the placement of the logo it replaces; with none it lands at the
+  // starting place. Each logo placed is an undo step of its own, however soon after the last
+  // (ruling R19), so the commit names no control for History to merge it under.
   function place(image, settings) {
     const wanted = settings || {};
+    // Stored before the commit, so the state change it makes finds the logo already written.
+    storePhotoOverlay(image);
     CF.commit(state => {
       const defaults = defaultPlacement(image);
-      // Saved settings come from storage.
+      // The saved logo's settings come from storage, so each value is checked; a replaced
+      // logo's placement passes the same check.
       const isUnit = value => typeof value === 'number' && value >= 0 && value <= 1;
       const unitOr = (value, fallback) => (isUnit(value) ? value : fallback);
       setPlacement(state, Object.assign(defaults, {
@@ -234,8 +260,7 @@
         w: unitOr(wanted.w, defaults.w) || defaults.w,
         opacity: unitOr(wanted.opacity, defaults.opacity),
       }));
-    }, 'overlayPlace');
-    CF.Session.put('photoOverlay', storedRecord(image)).catch(() => {});
+    });
   }
 
   // The fields of an image record that go into storage.
@@ -243,8 +268,26 @@
     return { id: image.id, buf: image.buf, type: image.type, name: image.name };
   }
 
-  // Adds a logo (the button, or drop or paste on this step). Errors leave the current overlay
-  // as it was.
+  // Stores an image as this photo's logo for Resume ('photoOverlay'); best-effort.
+  function storePhotoOverlay(image) {
+    photoOverlayId = image.id;
+    CF.Session.put('photoOverlay', storedRecord(image)).catch(() => {});
+  }
+
+  // Keeps the logo on the photo where Resume can find it (ruling R35). Undo, a pair's side
+  // switch or Delete saved can leave on the photo a logo that is neither this photo's stored
+  // logo nor the saved one, the two places ensureOverlayImage looks; it then becomes this
+  // photo's stored logo. Called after every state change and whenever the saved logo changes.
+  function keepPhotoOverlayStored() {
+    const overlay = app.state && app.state.overlay;
+    if (!overlay || overlay.id === photoOverlayId) return;
+    if (saved && saved.id === overlay.id) return;
+    const image = images.get(overlay.id);
+    if (image) storePhotoOverlay(image);
+  }
+
+  // Adds a logo (Add logo, Replace logo, or drop or paste on this step). Errors leave the
+  // current overlay as it was.
   async function addOverlayFile(file) {
     if (!app.img || !frame() || !file) return;
     const type = imageTypeOf(file);
@@ -252,10 +295,9 @@
       setMessage(MESSAGES.type);
       return;
     }
-    const maxBytes = CONFIG.overlay.maxBytes;
-    if (file.size > maxBytes) {
+    if (file.size > CONFIG.overlay.maxBytes) {
       const sizeMb = (file.size / BYTES_PER_MB).toFixed(1);
-      setMessage(`That file is ${sizeMb} MB. The overlay limit is ${maxBytes / BYTES_PER_MB} MB.`);
+      setMessage(`That file is ${sizeMb} MB. The logo limit is ${logoLimitText()}.`);
       return;
     }
     let image;
@@ -266,7 +308,10 @@
       return;
     }
     app.overlayMessage = '';
-    place(image, null);
+    // A logo that replaces one on the photo takes its position, width and opacity (ruling R18);
+    // with none there it lands at the starting place.
+    const replaced = app.state.overlay;
+    place(image, replaced ? settingsOf(replaced) : null);
     saveToBrowser(image);
   }
 
@@ -281,7 +326,7 @@
       await CF.Session.put('overlay', record);
       setSaved(record);
     } catch (error) {
-      const message = 'This overlay works on this photo, but it can’t be saved in this browser.';
+      const message = 'This logo works on this photo, but it can’t be saved in this browser.';
       toast(message, 'warn', 5000);
     }
   }
@@ -302,6 +347,8 @@
         url: URL.createObjectURL(new Blob([record.buf], { type: record.type })),
       }
       : null;
+    // The logo on the photo may have counted on the saved logo that was just replaced or deleted.
+    keepPhotoOverlayStored();
     CF.syncUI();
   }
 
@@ -315,12 +362,13 @@
   let settingsTimer = 0;
   // The latest placement becomes the saved "last used" settings (only for the saved logo).
   // A message shown over an earlier placement is cleared too (state.js calls this before the
-  // controls are synced).
+  // controls are synced), and the logo now on the photo is kept stored for Resume.
   function overlayStateChanged() {
     const overlay = app.state && app.state.overlay;
     if (app.overlayMessage && JSON.stringify(overlay || null) !== messagePlacement) {
       app.overlayMessage = '';
     }
+    keepPhotoOverlayStored();
     if (!overlay || !saved || overlay.id !== saved.id) return;
     const settings = settingsOf(overlay);
     if (JSON.stringify(settings) === JSON.stringify(saved.settings)) return;
@@ -375,6 +423,7 @@
       try {
         const record = await CF.Session.get(key);
         if (record && record.id === overlay.id) {
+          if (key === 'photoOverlay') photoOverlayId = record.id;
           await register(record.buf, record.type, record.name);
           CF.requestRender();
           CF.syncUI();
@@ -445,7 +494,7 @@
       const name = typeof embedded.name === 'string' ? embedded.name.slice(0, 200) : 'overlay';
       const image = await register(fromBase64(embedded.data), embedded.type, name);
       state.overlay.id = image.id;
-      CF.Session.put('photoOverlay', storedRecord(image)).catch(() => {});
+      storePhotoOverlay(image);
       return true;
     } catch (error) {
       return false;
@@ -455,12 +504,13 @@
   /* ---------- export compositing ---------- */
 
   // Draws the overlay onto the finished output canvas, before encoding. drawImage keeps the
-  // logo's own alpha; globalAlpha applies the opacity on top.
+  // logo's own alpha; globalAlpha applies the opacity on top. A logo whose image isn't loaded
+  // stops the save with advice the failed save shows as it is (CF.adviceError, ruling R49).
   function compositeOverlay(ctx, state, outputWidth, outputHeight) {
     if (!state.overlay) return;
     const image = images.get(state.overlay.id);
     if (!image) {
-      throw new Error('The overlay image isn’t loaded. Open the Overlay step and add it again.');
+      throw CF.adviceError('The logo isn’t loaded. Open the Overlay step and add it again.');
     }
     const placement = effective(state.overlay, outputWidth, outputHeight);
     const rect = CardEngine.overlayRect(placement, outputWidth, outputHeight);
@@ -957,7 +1007,17 @@
   const OVERLAY_KEYS = [
     'Arrows move the logo (Shift for bigger steps); + and − resize it; the wheel resizes too.',
   ];
-  const OVERLAY_HINT = 'Add a logo or watermark: PNG, WebP, JPG or SVG, up to 5 MB.';
+  // The line above the controls while the corners are invalid: no logo can be added until they
+  // are fixed (ruling R11). The photo area shows the same words then, written out in
+  // js/app/view.js (draw): a rewording changes both.
+  const FIX_CORNERS_FIRST = 'Fix the corners in Perspective first.';
+
+  // The hint shown with no logo placed. It gives the size limit in force, which a link can
+  // lower (ruling R83), in the words the refusal of a file over it uses.
+  function overlayHint() {
+    return `Add a logo or watermark: PNG, WebP, JPG or SVG, up to ${logoLimitText()}.`;
+  }
+
   // The move pad's keys, left to right, with the direction each moves the logo, and the size
   // pad's. A key's value is what nudge() takes.
   const MOVE_KEYS = [
@@ -976,7 +1036,7 @@
   function buildOverlayControls() {
     const section = document.querySelector('section[data-panel="overlay"]');
     const area = CF.buildControlArea('overlayArea',
-      CF.buildLabelRow('overlayHintLine', makeEl('span', { class: 'overlay-hint' }, OVERLAY_HINT)),
+      CF.buildLabelRow('overlayHintLine', makeEl('span', { class: 'overlay-hint' }, overlayHint())),
       buildOpacityLine(),
       CF.buildStatus('overlayStatus'),
       buildAddRow(),
@@ -1095,13 +1155,18 @@
   // Writes the state into the controls. Three states: no logo and none saved (the hint and
   // Add logo), a saved logo offered (its thumbnail, Use saved overlay and the Delete saved
   // tool as well), and a logo placed (Opacity, the pads and all four tools). A message takes
-  // the label row in any of them.
+  // the label row in any of them. While the corners are invalid no logo can be added: the
+  // message is the line that says to fix them, and Add logo, Use saved overlay and Replace
+  // logo are dimmed (ruling R11).
   function syncOverlay() {
     const overlay = app.state && app.state.overlay;
     const hasPhoto = !!app.img;
+    const hasBadCorners = hasPhoto && !!app.geometry && !app.geometry.ok;
+    const canAdd = hasPhoto && !hasBadCorners;
     const isPlaced = !!overlay;
     const hasSaved = !!saved;
-    const message = { kind: 'error', text: app.overlayMessage || '' };
+    const text = hasBadCorners ? FIX_CORNERS_FIRST : app.overlayMessage || '';
+    const message = { kind: 'error', text };
     const isStatusShown = CF.updateStatus(byId('overlayStatus'), message);
     byId('overlayHintLine').hidden = isPlaced || isStatusShown;
     byId('overlayOpacityLine').hidden = !isPlaced || isStatusShown;
@@ -1110,8 +1175,8 @@
     const thumb = byId('overlayThumb');
     thumb.hidden = !hasSaved;
     if (hasSaved && thumb.getAttribute('src') !== saved.url) thumb.src = saved.url;
-    CF.updateActionButton(byId('btnUseSaved'), { isHidden: !hasSaved, isDisabled: !hasPhoto });
-    CF.updateActionButton(byId('btnOverlayAdd'), { isDisabled: !hasPhoto });
+    CF.updateActionButton(byId('btnUseSaved'), { isHidden: !hasSaved, isDisabled: !canAdd });
+    CF.updateActionButton(byId('btnOverlayAdd'), { isDisabled: !canAdd });
     CF.updateNudgePad(byId('overlayMovePad'), { isDisabled: !isPlaced });
     CF.updateNudgePad(byId('overlaySizePad'), { isDisabled: !isPlaced });
     const percent = isPlaced ? Math.round(overlay.opacity * 100) : 100;
@@ -1120,17 +1185,18 @@
       isDisabled: !isPlaced,
     });
     byId('overlayOpacityValue').textContent = `${percent}%`;
-    syncOverlayTools(isPlaced, hasSaved, hasPhoto);
+    syncOverlayTools(isPlaced, hasSaved, canAdd);
   }
 
   // The tool row: all four tools with a logo placed; Delete saved alone while a saved logo is
-  // only offered; no row with neither. Delete saved is dimmed while nothing is saved.
-  function syncOverlayTools(isPlaced, hasSaved, hasPhoto) {
+  // only offered; no row with neither. Delete saved is dimmed while nothing is saved, and
+  // Replace logo while no logo can be added (canAdd: a photo is open and its corners are valid).
+  function syncOverlayTools(isPlaced, hasSaved, canAdd) {
     byId('overlayTools').hidden = !isPlaced && !hasSaved;
     for (const id of ['toolOverlayReplace', 'toolOverlayReset', 'toolOverlayRemove']) {
       byId(id).hidden = !isPlaced;
     }
-    CF.updateTool(byId('toolOverlayReplace'), { isDisabled: !isPlaced || !hasPhoto });
+    CF.updateTool(byId('toolOverlayReplace'), { isDisabled: !isPlaced || !canAdd });
     CF.updateTool(byId('toolOverlayReset'), { isDisabled: !isPlaced });
     CF.updateTool(byId('toolOverlayRemove'), { isDisabled: !isPlaced });
     CF.updateTool(byId('toolOverlayDeleteSaved'), { isDisabled: !hasSaved });
@@ -1138,6 +1204,7 @@
 
   Object.assign(CF, {
     buildOverlayControls,
+    isLogoFile,
     addOverlayFile,
     loadSavedOverlay,
     overlayStateChanged,

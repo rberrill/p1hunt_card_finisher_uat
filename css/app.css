@@ -191,7 +191,8 @@ section[data-panel].active { display: flex; flex-direction: column; flex: 1; min
   user-select: none;
 }
 .icon-button:disabled, .step-tab:disabled, .text-button:disabled, .tool:disabled,
-.action-button:disabled, .preset-chip:disabled, .segment:disabled, .nudge-key:disabled {
+.action-button:disabled, .preset-chip:disabled, .segment:disabled, .nudge-key:disabled,
+.sheet-row:disabled {
   opacity: .38;
   cursor: default;
 }
@@ -382,24 +383,32 @@ section[data-panel].active { display: flex; flex-direction: column; flex: 1; min
   white-space: nowrap;
 }
 .tool-row { height: 70px; flex: none; margin-top: 6px; display: flex; gap: 5px; }
-/* M3, a mode tap swaps the line (160 ms): the old rows fade out in 60 ms, then the new ones
-   rise 6 px and fade in over 100 ms, ease-out (CF.swapLine sequences the two). */
-.label-row.is-leaving, .control-row.is-leaving { opacity: 0; transition: opacity 60ms ease-out; }
-.label-row.is-entering, .control-row.is-entering { animation: line-in 100ms ease-out; }
+/* In M3 and M7 below it is each row's children that fade, not the row: while its opacity
+   animates (or is under 1) an element is a stacking context of its own, and a row that was one
+   kept its controls under the grabber for the length of the fade, whatever their z-index, so
+   the grabber took their taps (ruling R40). A row paints nothing itself, and its children move
+   together, so the fades look the same. The class stays on the row (M3) or the area (M7).
+   Reduced motion: all are instant (the global rule drops the animations; JS skips the wait). */
+/* M3, a mode tap swaps the line (160 ms): the old rows fade out in 60 ms and stay out until
+   they are swapped, then the new ones rise 6 px and fade in over 100 ms, ease-out (CF.swapLine
+   sequences the two). */
+.label-row.is-leaving > *, .control-row.is-leaving > * {
+  animation: line-out 60ms ease-out forwards;
+}
+.label-row.is-entering > *, .control-row.is-entering > * { animation: line-in 100ms ease-out; }
+@keyframes line-out {
+  to { opacity: 0; }
+}
 @keyframes line-in {
   from { opacity: 0; transform: translateY(6px); }
 }
 /* M7, a step change: the new step's rows fade in over 120 ms, ease-out. The grabber's tab and
    the progress line stay as they are; on a wide screen the inline options don't fade. */
-.control-area.is-arriving > :not(.grabber):not(.progress-line) {
+.control-area.is-arriving > :not(.grabber):not(.progress-line) > * {
   animation: area-in 120ms ease-out;
 }
 @keyframes area-in {
   from { opacity: 0; }
-}
-/* Reduced motion: both are instant (the global rule drops the animations; JS skips the wait). */
-@media (prefers-reduced-motion: reduce) {
-  .label-row.is-leaving, .control-row.is-leaving { opacity: 1; transition: none; }
 }
 
 /* ---- part: status ---- */
@@ -882,9 +891,10 @@ section[data-panel].active { display: flex; flex-direction: column; flex: 1; min
 /* Over the photo's bottom edge: inset 16 px, 36 px up on the phone (12 px above the grabber's
    24 px tab), above every other layer. core.js sets --toast-lift to the height of the photo an
    open sheet covers, which puts the toast as far above that sheet's edge, so it clears the
-   sheet's tab too. The pill grows upward from its bottom edge, to three lines at most, and
-   never takes a touch. Motion M10: it rises 8 px as it fades in (160 ms) and fades out in
-   200 ms; one it replaces fades out in 80 ms; under reduced motion it only fades. */
+   sheet's tab too. The pill grows upward from its bottom edge, to three lines at most (a message
+   of several lines, below, shows them all), and never takes a touch. Motion M10: it rises 8 px
+   as it fades in (160 ms) and fades out in 200 ms; one it replaces fades out in 80 ms; under
+   reduced motion it only fades. */
 .toast-message {
   position: absolute;
   left: 16px;
@@ -938,6 +948,11 @@ section[data-panel].active { display: flex; flex-direction: column; flex: 1; min
   /* A word wider than the pill (a long file name) breaks, so it is never cut at the edge. */
   overflow-wrap: anywhere;
 }
+/* A message of several lines (toast.js, `lines`): each line is a block of its own, and none is
+   cut, since each says something of its own (Load edits: "Edits loaded.", then a line for each
+   problem with the file). A line break inside a line's text still shows as a space. */
+.toast-text.is-lines { display: block; -webkit-line-clamp: none; }
+.toast-line { display: block; }
 /* A wide screen: bottom center of the photo, 20 px up, as wide as its words up to 460 px
    (frame DT10). */
 @media (min-width: 761px) {
@@ -1322,6 +1337,8 @@ section[data-panel].active { display: flex; flex-direction: column; flex: 1; min
   color: var(--quiet);
   pointer-events: none;
 }
+/* The sheet's one block, its tips: spaced as paragraphs set straight in a sheet are. */
+.levels-tips { display: flex; flex-direction: column; gap: 10px; }
 
 /* ---- step: Overlay ---- */
 /* Owned by js/app/overlay.js's phase. Phone-only and wide-only rules go in a
@@ -1563,6 +1580,20 @@ section[data-panel].active { display: flex; flex-direction: column; flex: 1; min
     );
     max-height: 40vh;
   }
+  /* Before a photo there is no control area: the panel sits 8 px above the screen's bottom
+     edge, a quarter of the screen tall at most, and the start screen stacks its content from
+     16 px above that room upward. So the panel never covers Open photo or the Resume box at any
+     height (ruling R51). It is absolute against the app's box, which is the screen here, as
+     nothing at the screen's bottom edge is position: fixed. */
+  #app:not(.has-img) #debugPanel {
+    position: absolute;
+    bottom: calc(env(safe-area-inset-bottom) + 8px);
+    max-height: 25vh;
+  }
+  #app:not(.has-img):has(> #debugPanel:not([hidden])) .start-screen {
+    justify-content: flex-end;
+    padding-bottom: calc(25vh + env(safe-area-inset-bottom) + 24px);
+  }
 }
 
 /* ---- shell: a wide screen ---- */
@@ -1677,11 +1708,14 @@ section[data-panel].active { display: flex; flex-direction: column; flex: 1; min
     padding: 12px 16px 0;
     border-top: 1px solid var(--edge);
   }
-  /* Where the options hold only the tips (Overlay), the sheet's own line and heading would
-     stand over nothing: the tips block takes the sheet's place under its line. */
+  /* Where the options hold only the tips (Overlay, Levels), the sheet's own line and heading
+     would stand over nothing: the tips block takes the sheet's place under its line. */
   .sheet:has(> .sheet-body > .sheet-tips-group:only-child) > .sheet-header { display: none; }
   .sheet-body > .sheet-tips-group:only-child { margin: 0; padding: 0; border-top: 0; }
   #debugPanel { right: 388px; top: 64px; }
+  /* Before a photo the side panel is empty: the tuning panel sits over it, off the start
+     screen, so it never covers Open photo or the Resume box (ruling R51). */
+  #app:not(.has-img) #debugPanel { right: calc(env(safe-area-inset-right) + 8px); }
 }
 /* The top bar on a narrower wide screen. In full it needs 1094 px with a pair open, 1109 with
    Levels' mark too. Up to 1119 px the name and Open's label go (the icons stay) and the step
@@ -1725,7 +1759,7 @@ section[data-panel].active { display: flex; flex-direction: column; flex: 1; min
     background: var(--control);
   }
   .text-button:hover:not(:disabled) { border-radius: 10px; }
-  .sheet-row:hover { background: var(--pressed); }
+  .sheet-row:hover:not(:disabled) { background: var(--pressed); }
   .sheet-list > .sheet-row:first-child:hover { border-radius: 12px 12px 0 0; }
   .sheet-list > .sheet-row:last-child:hover { border-radius: 0 0 12px 12px; }
   .sheet-list > .sheet-row:only-child:hover { border-radius: 12px; }

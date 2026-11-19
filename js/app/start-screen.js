@@ -53,6 +53,9 @@
     byId('btnOpenEmpty').classList.add('is-main');
   }
 
+  // Resume: brings back the stored photo with its edits, and a pair's other side. A failure
+  // the app can't explain shows a short fixed line, and its own words go to the console
+  // (ruling R24).
   async function resumeSession() {
     hideResume();
     try {
@@ -69,14 +72,17 @@
       const name = shortText(photo.name, 200) || 'photo';
       const type = typeof photo.type === 'string' ? photo.type : '';
       // A pair's waiting side comes back first, so one full-size photo is decoded at a time.
-      if (pair) await CF.restorePair(pair);
+      const wasPairDropped = !!pair && !(await CF.restorePair(pair));
       const file = new File([photo.buf], name, { type });
-      const isOpen = await CF.openFile(file, name, edits);
+      // An empty record when the saved edits have gone: openFile then says the photo opened
+      // fresh, as it does for edits it can't use (ruling R23).
+      const isOpen = await CF.openFile(file, name, edits || {});
       if (!isOpen) app.pair = null;
-      CF.finishResume();
+      // A photo that didn't open, or that another one overtook, keeps its own message or none.
+      CF.finishResume(wasPairDropped && isOpen);
     } catch (error) {
       console.error(error);
-      toast('Couldn’t resume: ' + error.message, 'error', 6000);
+      toast('Couldn’t resume.', 'error', 6000);
     }
   }
 

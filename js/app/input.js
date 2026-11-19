@@ -172,8 +172,10 @@
     app.gesture = stepGesture(view, point, base, event.shiftKey) || panGesture(view, base);
   }
 
-  // A second finger turns any drag into a pinch.
+  // A second finger turns any drag into a pinch. A Levels pick being aimed is cancelled first:
+  // the press takes no color and the pick stays armed (ruling R8).
   function startPinch(view) {
+    if (app.gesture && app.gesture.type === 'dropper') app.gesture.isCancelled = true;
     endGesture();
     const [first, second] = [...pointers.values()];
     app.gesture = {
@@ -230,7 +232,8 @@
   }
 
   // A pan, built on `base`. On Levels, pressing and holding the photo without moving compares
-  // it with no levels (the timer checks the gesture is still the live one).
+  // it with no levels (the timer checks the gesture is still the live one). With no levels to
+  // compare, setCompare starts nothing and the press stays an ordinary pan (ruling R9).
   function panGesture(view, base) {
     const gesture = Object.assign(base, {
       type: 'pan',
@@ -239,8 +242,8 @@
     if (app.tab === 'levels' && hasGeometry()) {
       gesture.holdTimer = setTimeout(() => {
         if (app.gesture !== gesture || gesture.moved) return;
-        gesture.comparing = true;
         CF.setCompare(true);
+        gesture.comparing = app.compare;
       }, CONFIG.levels.compareHoldMs);
     }
     return gesture;
@@ -266,6 +269,8 @@
     });
   }
 
+  // A pointer moved. With none down it only sets the mouse cursor; with one down it carries on
+  // the gesture the press began: the logo's on Overlay, a pinch, a pan, or a handle or crop drag.
   function onPointerMove(event) {
     if (!pointers.has(event.pointerId)) {
       hoverCursor(event);
@@ -294,7 +299,11 @@
     }
     if (gesture.type === 'pan') {
       if (gesture.comparing) return;
-      // The mouse's hand closes while it holds the photo; onPointerUp opens it again.
+      // Until the press has passed the drag threshold it is still a tap or a hold, so the view
+      // stays exactly as it was, still fitted. Past it, the photo follows the pointer, measured
+      // from where it was pressed.
+      if (!gesture.moved) return;
+      // The mouse's hand closes while it drags the photo; onPointerUp opens it again.
       if (event.pointerType === 'mouse') elements.canvas.style.cursor = 'grabbing';
       view.panX = gesture.startView.panX + point[0] - gesture.start[0];
       view.panY = gesture.startView.panY + point[1] - gesture.start[1];
@@ -372,12 +381,37 @@
       if (view) CF.findCardAt(CF.toWorld(view, gesture.start));
       return;
     }
-    const isTap = gesture && !gesture.moved && performance.now() - gesture.startTime < TAP_MS;
+    // A press that showed Levels' comparison is never a tap, however short it was (ruling R10).
+    const isTap = gesture
+      && !gesture.moved
+      && !gesture.comparing
+      && performance.now() - gesture.startTime < TAP_MS;
     if (isTap && gesture.type === 'pan') checkDoubleTap(gesture);
     if (isTap && gesture.type === 'handle') checkHandleDoubleTap(gesture);
     endGesture();
     // A pan left the closed hand; show what a press here would do now.
     hoverCursor(event);
+  }
+
+  // The browser took the pointer away in the middle of a gesture (on an iPhone, a system
+  // gesture such as Control Center takes the touch). A drag that edits the photo goes back to
+  // where it started, with no undo step; any other gesture ends as it does on a lift.
+  function onPointerCancel(event) {
+    const gesture = app.gesture;
+    if (!pointers.has(event.pointerId) || !isEditDrag(gesture)) {
+      onPointerUp(event);
+      return;
+    }
+    pointers.delete(event.pointerId);
+    app.gesture = null;
+    // A still press moved nothing, so there is nothing to put back (commitFrom's comparison).
+    if (JSON.stringify(gesture.before) === JSON.stringify(app.state)) {
+      CF.requestRender();
+      return;
+    }
+    // The snapshot from before the drag becomes the state again, as Undo would put it back.
+    app.state = gesture.before;
+    CF.stateChanged();
   }
 
   // Zooms to handleZoom × the fit scale centered on a handle, or back to fit if already zoomed.
@@ -401,18 +435,25 @@
     CF.requestRender();
   }
 
-  // Ends the current gesture: stops a compare, drops a dropper pick, commits a drag.
+  // Whether a gesture is a drag that edits the photo (a handle, the crop box or the logo): it
+  // holds the state from before the drag, to become an undo step or to go back to.
+  function isEditDrag(gesture) {
+    if (!gesture || !gesture.before) return false;
+    return gesture.type === 'handle'
+      || gesture.type === 'crop'
+      || gesture.type.startsWith('overlay');
+  }
+
+  // Ends the current gesture: stops a compare, takes a dropper's pick (unless a second finger
+  // cancelled it), commits a drag.
   function endGesture() {
     const gesture = app.gesture;
     app.gesture = null;
     if (!gesture) return;
     clearTimeout(gesture.holdTimer);
     if (gesture.comparing) CF.setCompare(false);
-    if (gesture.type === 'dropper') CF.pickAt(gesture.last);
-    const isEdit = gesture.type === 'handle'
-      || gesture.type === 'crop'
-      || gesture.type.startsWith('overlay');
-    if (isEdit && gesture.before) CF.commitFrom(gesture.before);
+    if (gesture.type === 'dropper' && !gesture.isCancelled) CF.pickAt(gesture.last);
+    if (isEditDrag(gesture)) CF.commitFrom(gesture.before);
     CF.requestRender();
   }
 
@@ -698,6 +739,9 @@
       return;
     }
     if (app.tab !== 'perspective') return;
+    // Preview hides the handles, so the keys leave them alone (ruling R2): the arrows move
+    // nothing, and Tab moves the focus on as it does between controls.
+    if (app.previewMode) return;
     if (event.key === 'Tab') {
       if (stepHandleByTab(event.shiftKey)) event.preventDefault();
       return;
@@ -782,6 +826,7 @@
     onPointerDown,
     onPointerMove,
     onPointerUp,
+    onPointerCancel,
     setCropAbsolute,
     onWheel,
     onKeyDown,

@@ -37,6 +37,13 @@
   ];
   const CORNER_HINT = 'Close-ups of the card’s four corners, at the photo’s own resolution, '
     + 'with this photo’s levels and no overlay.';
+  // The engine's reason for refusing a card with no size to cut corners from, in the engine's
+  // words (js/engine.js, cornerShots). The size line tells it from any other reason.
+  const TOO_SMALL_REASON = 'The card is too small for corner shots.';
+  // How the size line ends when the engine can't make the corner shots (ruling R20, the
+  // approved wording): for a card that is too small, and for any other reason.
+  const TOO_SMALL_ENDING = ' · the card is too small';
+  const FIX_CORNERS_ENDING = ' · fix the corners in Perspective first';
 
   /* ---------- the output choice (a preference) ---------- */
 
@@ -143,14 +150,12 @@
   // (the sheet, or each photo) would be under CONFIG.cornerShots.upscaleTargetPx at the
   // photo's resolution, the upscale question (CF.askUpscale) comes first; Yes or No then
   // saves, Cancel doesn't. Never marks the edits as exported: only the main
-  // export shows Next card.
+  // export shows Next card. Corner shots that can't be made save nothing and say nothing here:
+  // both buttons are off then, and the size line gives the reason (syncCornerShots).
   function saveCornerShots(kind) {
     if (!app.img || app.exporting || app.isSwitching) return;
     const shots = currentShots();
-    if (!shots.ok) {
-      toast(shots.reason, 'error', 5000);
-      return;
-    }
+    if (!shots.ok) return;
     const targetPx = CONFIG.cornerShots.upscaleTargetPx;
     const realFilePx = filePx(shots.sizePx);
     if (!(targetPx > 0) || realFilePx >= targetPx) {
@@ -164,16 +169,16 @@
 
   // Renders and saves the corner shots. isUpscaled: render every tile at the size that makes
   // the file CONFIG.cornerShots.upscaleTargetPx, bicubic whatever the export's interpolation,
-  // and sharpen it (renderShot).
+  // and sharpen it (renderShot). A failure shows a short fixed line, and its own words go to
+  // the console (ruling R24); one whose fix the app knows shows its advice instead
+  // (CF.failureText).
   async function renderAndSave(kind, isUpscaled) {
     const state = clone(app.state);
     const geometry = CardEngine.computeGeometry(state, geometryConfig());
     const tilePx = isUpscaled ? upscaledTilePx() : 0;
     const shots = CardEngine.cornerShots(geometry, CONFIG.cornerShots, tilePx);
-    if (!shots.ok) {
-      toast(shots.reason, 'error', 5000);
-      return;
-    }
+    // saveCornerShots has already turned these edits away when their shots can't be made.
+    if (!shots.ok) return;
     shots.isUpscaled = isUpscaled;
     if (isUpscaled) state.export.interp = 'bicubic';
     const type = CF.MIME_TYPES[state.export.format];
@@ -188,17 +193,27 @@
       await deliverCornerShots(kind, files, startTime, shots, type);
     } catch (error) {
       console.error(error);
-      toast('Corner shots failed: ' + error.message, 'error', 6000);
+      toast(CF.failureText(error, 'Corner shots failed.'), 'error', 6000);
     }
   }
 
-  // Delivers finished corner files by Download or Share, with a toast saying how it went and,
-  // after an upscale, at what size. type: the requested MIME type (CF.toastSaved's note).
+  // What the finished message calls the saved corner files, and their size as it writes it
+  // (ruling R79): the sheet with its own size ("Corner sheet", "2008 × 2008 px"), or the four
+  // photos with one photo's size and "each" ("4 corner photos", "1000 × 1000 px each").
+  // isSheet: one sheet was saved, not four photos.
+  function savedCorners(shots, isSheet) {
+    const tilePx = shots.sizePx;
+    if (!isSheet) return { thing: '4 corner photos', size: `${tilePx} × ${tilePx} px each` };
+    const sheetPx = shots.isUpscaled ? CONFIG.cornerShots.upscaleTargetPx : 0;
+    const layout = CardEngine.cornerSheetLayout(tilePx, CONFIG.cornerShots, sheetPx);
+    return { thing: 'Corner sheet', size: `${layout.width} × ${layout.height} px` };
+  }
+
+  // Delivers finished corner files by Download or Share, with a toast saying how it went and
+  // at what size. type: the requested MIME type (CF.toastSaved's note).
   async function deliverCornerShots(kind, files, startTime, shots, type) {
     const seconds = ((performance.now() - startTime) / 1000).toFixed(1);
-    const what = files.length === 1 ? 'the corner sheet' : `${files.length} corner shots`;
-    const size = shots.isUpscaled ? ` at ${CONFIG.cornerShots.upscaleTargetPx} px` : '';
-    const done = `Saved ${what}${size} in ${seconds} s.`;
+    const saved = Object.assign(savedCorners(shots, files.length === 1), { seconds });
     if (kind === 'download') {
       // Saved first, since a download can leave the page on iPhone.
       CF.Session.flush();
@@ -206,11 +221,11 @@
         if (i) await new Promise(resolve => setTimeout(resolve, DOWNLOAD_GAP_MS));
         CF.Exporter.download(files[i], files[i].name);
       }
-      CF.toastSaved(done, files, type, 'saved');
+      CF.toastSaved(saved, files, type, 'saved');
       return;
     }
     const outcome = await shareCornerShots(files);
-    CF.toastSaved(done, files, type, outcome);
+    CF.toastSaved(saved, files, type, outcome);
   }
 
   // Shares the corner files in one share sheet. On 'pending' (a slow render) the sheet's
@@ -227,11 +242,18 @@
 
   /* ---------- the sheet: thumbnails, output, readout, save row ---------- */
 
-  // The readout: what will be saved and how big, at the photo's real resolution; or, for a
-  // card too small to give corner shots, that it is (frame CS6).
+  // The readout: what will be saved and how big, at the photo's real resolution. When the
+  // engine can't make the corner shots it gives the reason instead (ruling R20): that the card
+  // is too small, or for any other reason that the corners need fixing. While the corners are
+  // invalid it is empty (currentShots gives no reason then).
   function readout(shots, state) {
     const isPhotos = app.cornerShotsOutput === 'photos';
-    if (!shots.ok) return [`${isPhotos ? '4 photos' : 'Sheet'} · the card is too small`];
+    if (!shots.ok) {
+      if (!shots.reason) return [];
+      const isTooSmall = shots.reason === TOO_SMALL_REASON;
+      const ending = isTooSmall ? TOO_SMALL_ENDING : FIX_CORNERS_ENDING;
+      return [`${isPhotos ? '4 photos' : 'Sheet'}${ending}`];
+    }
     const format = state.export.format.toUpperCase();
     const sizePx = shots.sizePx;
     if (isPhotos) {
@@ -243,23 +265,28 @@
   }
 
   // Syncs the sheet to the edits and the output choice. Called from CF.syncReadouts. Both save
-  // buttons are off while the corners are invalid or anything is being saved (frame CS4);
-  // "Share now" stays on, since its files are already rendered. For a card that is too small
-  // they stay on, and a tap says why nothing is saved (frame CS6).
+  // buttons are off while the corner shots can't be made (invalid corners, or the engine
+  // refusing them: ruling R20) or anything is being saved (frame CS4); "Share now" stays on
+  // while saving, since its files are already rendered. Share shows only where the browser can
+  // share files, asked at every sync as the main export asks (ruling R21): hidden, never
+  // greyed, and Download, always shown, is then the red main action (frame CS3).
   function syncCornerShots() {
     const state = app.state;
     if (!state) return;
     const shots = currentShots();
     const isSaving = !!app.exporting || !!app.isSwitching;
-    const isTooSmall = !shots.ok && !!shots.reason;
-    const canSave = shots.ok || isTooSmall;
+    const canShare = CF.Exporter.canShare();
     CF.updateSegmented(byId('cornerOutput'), app.cornerShotsOutput);
-    byId('cornerReadout').replaceChildren(...(canSave ? readout(shots, state) : []));
+    byId('cornerReadout').replaceChildren(...readout(shots, state));
     CF.updateActionButton(byId('btnCornerShare'), {
       label: app.pendingCorners ? 'Share now' : 'Share corners',
-      isDisabled: !canSave || (isSaving && !app.pendingCorners),
+      isHidden: !canShare,
+      isDisabled: !shots.ok || (isSaving && !app.pendingCorners),
     });
-    CF.updateActionButton(byId('btnCornerDownload'), { isDisabled: !canSave || isSaving });
+    CF.updateActionButton(byId('btnCornerDownload'), {
+      look: canShare ? '' : 'main',
+      isDisabled: !shots.ok || isSaving,
+    });
     requestThumbs();
   }
 
@@ -339,7 +366,7 @@
   }
 
   // The save row: Share corners, the sheet's red main action, then Download corners. Where
-  // the browser can't share files, bindCornerShots hides Share and makes Download the red one.
+  // the browser can't share files, syncCornerShots hides Share and makes Download the red one.
   function buildCornerSaveRow() {
     return CF.buildControlRow('cornerSaveRow',
       CF.buildActionButton({
@@ -402,17 +429,13 @@
     if (selected) selected.focus({ preventScroll: true });
   }
 
-  // Wires the sheet's controls. Share shows only where the browser can share files, as for
-  // the main export (hidden, never greyed); there Download, always shown, is the red main
-  // action instead (frame CS3). The thumbnails draw as the sheet opens.
+  // Wires the sheet's controls. Whether Share shows is syncCornerShots' to say, at every sync.
+  // The thumbnails draw as the sheet opens.
   function bindCornerShots() {
     app.cornerShotsOutput = storedOutput();
     CF.bindSegmented(byId('cornerOutput'), setOutput);
     const share = byId('btnCornerShare');
     const download = byId('btnCornerDownload');
-    const canShare = CF.Exporter.canShare();
-    CF.updateActionButton(share, { isHidden: !canShare });
-    CF.updateActionButton(download, { look: canShare ? '' : 'main' });
     download.onclick = () => saveCornerShots('download');
     share.onclick = () => {
       if (app.pendingCorners) shareCornerShots(app.pendingCorners);
